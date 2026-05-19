@@ -1,0 +1,219 @@
+import { fetch, type Dispatcher } from 'undici';
+import { CookieJar } from 'tough-cookie';
+
+import { HiotApiError, HiotAuthError, HiotConnectionError } from './errors.js';
+import type {
+  DeviceBatchResponse,
+  DeviceCommand,
+  DeviceListResponse,
+  DeviceResponse,
+  LoginCondition,
+  LoginResponse,
+} from './types.js';
+
+const DEFAULT_APP_TYPE_CD = 'HIOT';
+const DEFAULT_OS_TYPE = 'ios';
+const SESSION_COOKIE_NAME = 'JSESSIONID_HIOTWEB';
+
+const LOGIN_PATH = '/hiot-web/login/exelogin';
+const DEVICE_LIST_PATH = '/hiot-web/device/getdevicelist';
+const DEVICE_GET_PATH = '/hiot-web/device/getdevice';
+const DEVICE_BATCH_PATH = '/hiot-web/device/exedevicebatchv2';
+
+export interface HiotClientLogger {
+  debug(message: string): void;
+  warn(message: string): void;
+  error(message: string): void;
+}
+
+export interface HiotClientOptions {
+  /** e.g. `https://home.hiot.autoever.com:8443` (no trailing slash required). */
+  baseUrl: string;
+  userid: string;
+  password: string;
+  /** Cached server-issued token from a previous login (auto-login fast path). */
+  initialUserKeyValu?: string;
+  pushRegistrationToken?: string;
+  mobileDeviceOsType?: string;
+  appTypeCd?: string;
+  logger?: HiotClientLogger;
+  /** Optional undici Dispatcher (e.g. MockAgent in tests). */
+  dispatcher?: Dispatcher;
+  /**
+   * Called every time the client receives a fresh `userkeyvalu` from the server.
+   * The platform layer can persist it to disk so the next plugin start
+   * skips the plaintext-password login path.
+   */
+  onTokenUpdate?: (token: string) => void;
+}
+
+interface RawResponse {
+  status: number;
+  text: string;
+}
+
+export class HiotClient {
+  private readonly cookieJar = new CookieJar();
+  private readonly baseUrl: string;
+  private readonly userid: string;
+  private readonly password: string;
+  private readonly appTypeCd: string;
+  private readonly mobileDeviceOsType: string;
+  private readonly pushRegistrationToken?: string;
+  private readonly logger?: HiotClientLogger;
+  private readonly dispatcher?: Dispatcher;
+  private readonly onTokenUpdate?: (token: string) => void;
+
+  private userKeyValu: string | undefined;
+
+  constructor(options: HiotClientOptions) {
+    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    this.userid = options.userid;
+    this.password = options.password;
+    this.appTypeCd = options.appTypeCd ?? DEFAULT_APP_TYPE_CD;
+    this.mobileDeviceOsType = options.mobileDeviceOsType ?? DEFAULT_OS_TYPE;
+    this.pushRegistrationToken = options.pushRegistrationToken;
+    this.logger = options.logger;
+    this.dispatcher = options.dispatcher;
+    this.onTokenUpdate = options.onTokenUpdate;
+    this.userKeyValu = options.initialUserKeyValu;
+  }
+
+  /** Currently cached server-issued token, if any. */
+  getUserKeyValu(): string | undefined {
+    return this.userKeyValu;
+  }
+
+  /**
+   * Force a login round-trip. Uses the cached `userkeyvalu` if present;
+   * otherwise falls back to plaintext password.
+   */
+  async login(): Promise<LoginResponse> {
+    return this.doLogin(false);
+  }
+
+  async getDeviceList(): Promise<DeviceListResponse> {
+    return this.authedJsonRequest<DeviceListResponse>(DEVICE_LIST_PATH, {});
+  }
+
+  async getDevice(devicecd: string): Promise<DeviceResponse> {
+    return this.authedJsonRequest<DeviceResponse>(DEVICE_GET_PATH, {
+      device: { devicecd },
+    });
+  }
+
+  async exeDeviceBatch(commands: DeviceCommand[]): Promise<DeviceBatchResponse> {
+    return this.authedJsonRequest<DeviceBatchResponse>(DEVICE_BATCH_PATH, {
+      device: commands,
+    });
+  }
+
+  private async doLogin(forcePlaintext: boolean): Promise<LoginResponse> {
+    const useToken = !forcePlaintext && Boolean(this.userKeyValu);
+    const condition: LoginCondition = {
+      apptypecd: this.appTypeCd,
+      userid: this.userid,
+      mobiledeviceostype: this.mobileDeviceOsType,
+    };
+    if (this.pushRegistrationToken) {
+      condition.pushregistrationtoken = this.pushRegistrationToken;
+    }
+    if (useToken) {
+      condition.userkeyvalu = this.userKeyValu;
+    } else {
+      condition.passwordvalu = this.password;
+    }
+
+    const raw = await this.rawRequest(LOGIN_PATH, { condition });
+    if (raw.status === 401 && useToken) {
+      // Cached token rejected — retry with plaintext password once.
+      this.logger?.warn('cached token rejected on login; retrying with plaintext');
+      this.userKeyValu = undefined;
+      return this.doLogin(true);
+    }
+    const data = this.parseSuccess<LoginResponse>(raw, 'login');
+    const token = data.login?.[0]?.userkeyvalu;
+    if (!token) {
+      throw new HiotAuthError('login response missing userkeyvalu');
+    }
+    this.userKeyValu = token;
+    this.onTokenUpdate?.(token);
+    this.logger?.debug(`login ok (autoLogin=${useToken})`);
+    return data;
+  }
+
+  private async authedJsonRequest<T>(path: string, body: unknown): Promise<T> {
+    await this.ensureAuthenticated();
+    let raw = await this.rawRequest(path, body);
+    if (raw.status === 401) {
+      this.logger?.warn(`401 on ${path}; re-authenticating with plaintext`);
+      await this.cookieJar.removeAllCookies();
+      this.userKeyValu = undefined;
+      await this.doLogin(true);
+      raw = await this.rawRequest(path, body);
+    }
+    return this.parseSuccess<T>(raw, path);
+  }
+
+  private async ensureAuthenticated(): Promise<void> {
+    const cookies = await this.cookieJar.getCookies(this.baseUrl);
+    const hasSession = cookies.some((c) => c.key === SESSION_COOKIE_NAME);
+    if (!hasSession) {
+      await this.doLogin(false);
+    }
+  }
+
+  private async rawRequest(path: string, body: unknown): Promise<RawResponse> {
+    const url = `${this.baseUrl}${path}`;
+    const cookieHeader = await this.cookieJar.getCookieString(url);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    if (cookieHeader) {
+      headers.cookie = cookieHeader;
+    }
+
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        dispatcher: this.dispatcher,
+      });
+    } catch (err) {
+      throw new HiotConnectionError(`request to ${path} failed`, err);
+    }
+
+    const setCookies = response.headers.getSetCookie?.() ?? [];
+    for (const sc of setCookies) {
+      try {
+        await this.cookieJar.setCookie(sc, url);
+      } catch (err) {
+        this.logger?.warn(`failed to store cookie from ${path}: ${(err as Error).message}`);
+      }
+    }
+
+    const text = await response.text();
+    return { status: response.status, text };
+  }
+
+  private parseSuccess<T>(raw: RawResponse, label: string): T {
+    if (raw.status === 401) {
+      throw new HiotAuthError(`unauthorized on ${label}`);
+    }
+    if (raw.status < 200 || raw.status >= 300) {
+      const snippet = raw.text ? `: ${raw.text.slice(0, 200)}` : '';
+      throw new HiotApiError(`HTTP ${raw.status} on ${label}${snippet}`);
+    }
+    if (!raw.text) {
+      return {} as T;
+    }
+    try {
+      return JSON.parse(raw.text) as T;
+    } catch (err) {
+      throw new HiotApiError(`invalid JSON from ${label}`, err);
+    }
+  }
+}
