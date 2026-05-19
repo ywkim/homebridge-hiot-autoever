@@ -63,13 +63,22 @@ export class LightbulbAccessory {
 
   private async handleOnGet(): Promise<CharacteristicValue> {
     const ctx = this.context();
+    let power: string | undefined;
     try {
       const res = await this.client.getDevice(ctx.devicecd);
-      return res.operation?.[0]?.power === 'on';
+      power = res.operation?.[0]?.power;
     } catch (err) {
       this.log.warn(`LGT onGet failed for devicetypecd=${ctx.devicetypecd}: ${(err as Error).message}`);
       throw this.notResponding();
     }
+    if (power === undefined) {
+      // Empirically every LGT getdevice response carries operation[0].power.
+      // A missing field signals an abnormal response; surface it as
+      // "Not Responding" rather than silently coercing to off.
+      this.log.warn(`LGT onGet: power field missing for devicetypecd=${ctx.devicetypecd}`);
+      throw this.notResponding();
+    }
+    return power === 'on';
   }
 
   private async handleOnSet(value: CharacteristicValue): Promise<void> {

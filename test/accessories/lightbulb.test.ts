@@ -207,10 +207,20 @@ describe('LightbulbAccessory', () => {
     expect(await on.getHandler!()).toBe(false);
   });
 
-  it('onGet returns false when operation is missing', async () => {
-    const { on, client } = setup();
+  it('onGet throws NOT_RESPONDING when operation is missing', async () => {
+    const { on, client, log } = setup();
     client.getDevice.mockResolvedValue({});
-    expect(await on.getHandler!()).toBe(false);
+    await expect(on.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
+    await expect(on.getHandler!()).rejects.toMatchObject({
+      hapStatus: HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+    });
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it('onGet throws NOT_RESPONDING when power field is missing', async () => {
+    const { on, client } = setup();
+    client.getDevice.mockResolvedValue({ operation: [{}] });
+    await expect(on.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
   });
 
   it('onGet throws HapStatusError NOT_RESPONDING when API call fails', async () => {
