@@ -7,13 +7,22 @@ import type {
 } from 'homebridge';
 
 import { HiotClient, type HiotClientLogger } from './api/client.js';
+import type { Device } from './api/types.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { TokenStore } from './storage/tokenStore.js';
 
 const DEFAULT_BASE_URL = 'https://home.hiot.autoever.com:8443';
 
+export interface HiotAccessoryContext {
+  devicecd: string;
+  devicetypecd: string;
+  devicenm: string;
+  spacenm?: string;
+}
+
 export class HiotPlatform implements DynamicPlatformPlugin {
   public readonly accessories: PlatformAccessory[] = [];
+  private readonly accessoriesByUUID = new Map<string, PlatformAccessory>();
 
   private readonly tokenStore: TokenStore;
   private readonly userid: string | undefined;
@@ -50,8 +59,8 @@ export class HiotPlatform implements DynamicPlatformPlugin {
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
-    // TODO: restore accessory state on Homebridge restart (next worktree)
     this.accessories.push(accessory);
+    this.accessoriesByUUID.set(accessory.UUID, accessory);
   }
 
   async handleDidFinishLaunching(): Promise<void> {
@@ -81,13 +90,69 @@ export class HiotPlatform implements DynamicPlatformPlugin {
     try {
       await client.login();
       const devices = await client.getDeviceList();
-      const count = devices.device?.length ?? 0;
-      this.log.info(`Hi-oT login successful; discovered ${count} device(s).`);
-      // Device identifiers/names intentionally suppressed at info level;
-      // dump full list only when debug logging is enabled.
-      this.log.debug(`device list: ${JSON.stringify(devices.device ?? [])}`);
+      this.syncAccessories(devices.device ?? []);
     } catch (err) {
       this.log.error(`Hi-oT bootstrap failed: ${(err as Error).message}`);
     }
+  }
+
+  private syncAccessories(devices: Device[]): void {
+    const seenUUIDs = new Set<string>();
+    let added = 0;
+    let restored = 0;
+
+    for (const device of devices) {
+      const uuid = this.api.hap.uuid.generate(device.devicecd);
+      seenUUIDs.add(uuid);
+
+      const context: HiotAccessoryContext = {
+        devicecd: device.devicecd,
+        devicetypecd: device.devicetypecd,
+        devicenm: device.devicenm,
+        spacenm: device.spacenm,
+      };
+
+      const cached = this.accessoriesByUUID.get(uuid);
+      if (cached) {
+        cached.context = { ...context };
+        restored += 1;
+        this.log.debug(
+          `restored accessory devicecd=${device.devicecd} devicetypecd=${device.devicetypecd} spacenm=${device.spacenm ?? ''}`,
+        );
+        continue;
+      }
+
+      const accessory = new this.api.platformAccessory(device.devicenm, uuid);
+      accessory.context = { ...context };
+      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      this.accessories.push(accessory);
+      this.accessoriesByUUID.set(uuid, accessory);
+      added += 1;
+      this.log.debug(
+        `registered accessory devicecd=${device.devicecd} devicetypecd=${device.devicetypecd} spacenm=${device.spacenm ?? ''}`,
+      );
+    }
+
+    const stale: PlatformAccessory[] = [];
+    for (const [uuid, cached] of this.accessoriesByUUID) {
+      if (!seenUUIDs.has(uuid)) {
+        stale.push(cached);
+      }
+    }
+    if (stale.length > 0) {
+      this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, stale);
+      for (const cached of stale) {
+        this.accessoriesByUUID.delete(cached.UUID);
+        const idx = this.accessories.indexOf(cached);
+        if (idx >= 0) {
+          this.accessories.splice(idx, 1);
+        }
+        this.log.debug(`removed accessory uuid=${cached.UUID}`);
+      }
+    }
+
+    this.log.info(
+      `Hi-oT discovered ${devices.length} device(s) (${added} new, ${stale.length} removed, ${restored} restored).`,
+    );
   }
 }
