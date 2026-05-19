@@ -9,15 +9,18 @@
       "name": {
         "title": "Platform Name",
         "type": "string",
-        "default": "HiotAutoever"
+        "default": "HiotAutoever",
+        "description": "Displayed in Homebridge logs and the bridge name."
       },
       "userid": {
-        "title": "User ID",
-        "type": "string"
+        "title": "Hi-oT User ID",
+        "type": "string",
+        "description": "The same ID you log into the Hi-oT mobile app with."
       },
       "password": {
-        "title": "Password",
+        "title": "Hi-oT Password",
         "type": "string",
+        "description": "Stored only in Homebridge config. The plugin caches a server-issued token on first login and skips the plaintext path afterward.",
         "x-schema-form": {
           "type": "password"
         }
@@ -26,12 +29,25 @@
         "title": "Poll Interval (seconds)",
         "type": "integer",
         "default": 30,
-        "minimum": 10
+        "minimum": 10,
+        "description": "How often to refresh device state from the Hi-oT cloud."
       },
       "debugLogging": {
         "title": "Debug Logging",
         "type": "boolean",
-        "default": false
+        "default": false,
+        "description": "Emit verbose logs (device list, HTTP details). Tokens and passwords are still suppressed."
+      },
+      "baseUrl": {
+        "title": "Hi-oT Base URL (advanced)",
+        "type": "string",
+        "default": "https://home.hiot.autoever.com:8443",
+        "description": "Override only if Hi-oT moves its endpoint. Leave default for standard deployments."
+      },
+      "pushRegistrationToken": {
+        "title": "Push Registration Token (advanced)",
+        "type": "string",
+        "description": "Optional. APNs/FCM token sent during login. Only needed to match production app fingerprinting; leave blank for normal use."
       }
     },
     "required": ["name", "userid", "password"]
