@@ -9,18 +9,15 @@
       "name": {
         "title": "Platform Name",
         "type": "string",
-        "default": "HiotAutoever",
-        "required": true
+        "default": "HiotAutoever"
       },
       "userid": {
         "title": "User ID",
-        "type": "string",
-        "required": true
+        "type": "string"
       },
       "password": {
         "title": "Password",
         "type": "string",
-        "required": true,
         "x-schema-form": {
           "type": "password"
         }
@@ -36,6 +33,7 @@
         "type": "boolean",
         "default": false
       }
-    }
+    },
+    "required": ["name", "userid", "password"]
   }
 }
