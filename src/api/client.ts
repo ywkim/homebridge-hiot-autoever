@@ -66,6 +66,9 @@ export class HiotClient {
 
   private userKeyValu: string | undefined;
 
+  /** In-flight login promise, used to coalesce concurrent login attempts. */
+  private loginInFlight: Promise<LoginResponse> | undefined;
+
   constructor(options: HiotClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.userid = options.userid;
@@ -108,7 +111,22 @@ export class HiotClient {
     });
   }
 
-  private async doLogin(forcePlaintext: boolean): Promise<LoginResponse> {
+  private doLogin(forcePlaintext: boolean): Promise<LoginResponse> {
+    // Coalesce concurrent logins: if another caller is already authenticating,
+    // wait for that result instead of issuing a duplicate request. This keeps
+    // burst startup polls (e.g. fetching state for many devices in parallel)
+    // from hitting the upstream auth endpoint repeatedly.
+    if (this.loginInFlight) {
+      return this.loginInFlight;
+    }
+    const p = this.performLogin(forcePlaintext).finally(() => {
+      this.loginInFlight = undefined;
+    });
+    this.loginInFlight = p;
+    return p;
+  }
+
+  private async performLogin(forcePlaintext: boolean): Promise<LoginResponse> {
     const useToken = !forcePlaintext && Boolean(this.userKeyValu);
     const condition: LoginCondition = {
       apptypecd: this.appTypeCd,
@@ -126,10 +144,11 @@ export class HiotClient {
 
     const raw = await this.rawRequest(LOGIN_PATH, { condition });
     if (raw.status === 401 && useToken) {
-      // Cached token rejected — retry with plaintext password once.
+      // Cached token rejected — retry with plaintext within the same in-flight
+      // login (calling doLogin would deadlock by awaiting itself).
       this.logger?.warn('cached token rejected on login; retrying with plaintext');
       this.userKeyValu = undefined;
-      return this.doLogin(true);
+      return this.performLogin(true);
     }
     const data = this.parseSuccess<LoginResponse>(raw, 'login');
     const token = data.login?.[0]?.userkeyvalu;
@@ -204,11 +223,17 @@ export class HiotClient {
       throw new HiotAuthError(`unauthorized on ${label}`);
     }
     if (raw.status < 200 || raw.status >= 300) {
-      const snippet = raw.text ? `: ${raw.text.slice(0, 200)}` : '';
-      throw new HiotApiError(`HTTP ${raw.status} on ${label}${snippet}`);
+      // Do not embed the response body in the error message — the backend may
+      // include sensitive fields (userkeyvalu, session ids) in error payloads,
+      // which would then leak via any upstream logger of error.message.
+      // The raw body is attached as the error cause for debugging instead.
+      throw new HiotApiError(`HTTP ${raw.status} on ${label}`, raw.text || undefined);
     }
     if (!raw.text) {
-      return {} as T;
+      // Hi-oT data endpoints always return a JSON object. An empty body
+      // would silently coerce to `{}` and crash downstream property access,
+      // so surface it as an error.
+      throw new HiotApiError(`empty response body from ${label}`);
     }
     try {
       return JSON.parse(raw.text) as T;

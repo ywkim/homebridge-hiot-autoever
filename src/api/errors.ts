@@ -1,15 +1,13 @@
 /**
  * Base error for any Hi-oT API failure.
+ *
+ * Uses the standard Node.js `Error` `options.cause` so loggers (pino, etc.)
+ * and debuggers can walk the cause chain automatically.
  */
 export class HiotApiError extends Error {
-  public readonly cause?: unknown;
-
   constructor(message: string, cause?: unknown) {
-    super(message);
+    super(message, cause !== undefined ? { cause } : undefined);
     this.name = 'HiotApiError';
-    if (cause !== undefined) {
-      this.cause = cause;
-    }
   }
 }
 

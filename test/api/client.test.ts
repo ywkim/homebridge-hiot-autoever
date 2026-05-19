@@ -247,16 +247,68 @@ describe('HiotClient', () => {
     expect(logins[1].condition.userkeyvalu).toBeUndefined();
   });
 
-  it('non-401 HTTP error propagates as HiotApiError (not HiotAuthError)', async () => {
+  it('non-401 HTTP error propagates as HiotApiError (not HiotAuthError) and does NOT embed response body in message', async () => {
     interceptOnce(LOGIN_PATH, {
       statusCode: 200,
       data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'T' }], complex: [] },
       responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=s; Path=/' } },
     });
-    interceptOnce('/hiot-web/device/getdevicelist', { statusCode: 500, data: 'boom' });
+    interceptOnce('/hiot-web/device/getdevicelist', { statusCode: 500, data: 'SENSITIVE_BODY_FRAGMENT' });
+
+    const client = newClient();
+    let caught: unknown;
+    try {
+      await client.getDeviceList();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HiotApiError);
+    expect(caught).not.toBeInstanceOf(HiotAuthError);
+    expect((caught as Error).message).not.toContain('SENSITIVE_BODY_FRAGMENT');
+    // body still available via cause for debugging
+    expect((caught as { cause?: unknown }).cause).toBe('SENSITIVE_BODY_FRAGMENT');
+  });
+
+  it('throws on empty response body instead of returning empty object', async () => {
+    interceptOnce(LOGIN_PATH, {
+      statusCode: 200,
+      data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'T' }], complex: [] },
+      responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=s; Path=/' } },
+    });
+    interceptOnce('/hiot-web/device/getdevicelist', { statusCode: 200, data: '' });
 
     const client = newClient();
     await expect(client.getDeviceList()).rejects.toBeInstanceOf(HiotApiError);
+  });
+
+  it('coalesces concurrent login attempts into a single network request', async () => {
+    let loginHits = 0;
+    const pool = agent.get(BASE_URL);
+    pool
+      .intercept({ path: LOGIN_PATH, method: 'POST' })
+      .reply(() => {
+        loginHits++;
+        return {
+          statusCode: 200,
+          data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'TOK' }], complex: [] },
+          responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=race; Path=/' } },
+        };
+      })
+      .times(5);
+    pool
+      .intercept({ path: '/hiot-web/device/getdevicelist', method: 'POST' })
+      .reply(200, { device: [] })
+      .times(5);
+
+    const client = newClient();
+    await Promise.all([
+      client.getDeviceList(),
+      client.getDeviceList(),
+      client.getDeviceList(),
+      client.getDeviceList(),
+      client.getDeviceList(),
+    ]);
+    expect(loginHits).toBe(1);
   });
 
   it('network failure wraps as HiotConnectionError', async () => {
