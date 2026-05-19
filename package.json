@@ -1,0 +1,55 @@
+{
+  "name": "homebridge-hiot-autoever",
+  "version": "0.0.0",
+  "description": "Homebridge plugin for Hi-oT (Hyundai Autoever) KOCOM wallpad-based Korean apartments.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=18",
+    "homebridge": ">=1.6.0 || >=2.0.0-beta.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:ci": "vitest run --coverage"
+  },
+  "keywords": [
+    "homebridge-plugin",
+    "hiot",
+    "hyundai-autoever",
+    "kocom",
+    "homekit"
+  ],
+  "dependencies": {
+    "pino": "^9.5.0",
+    "tough-cookie": "^5.0.0",
+    "undici": "^7.0.0"
+  },
+  "peerDependencies": {
+    "homebridge": ">=1.6.0 || >=2.0.0-beta.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^22.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.1.0",
+    "homebridge": "~1.6.1",
+    "pino-pretty": "^13.0.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "files": [
+    "dist",
+    "config.schema.json",
+    "LICENSE",
+    "README.md"
+  ]
+}
