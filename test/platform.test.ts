@@ -16,10 +16,11 @@ interface ClientOptionsCapture {
   onTokenUpdate?: (token: string) => void;
 }
 
-const { clientCtorCalls, loginMock, getDeviceListMock } = vi.hoisted(() => ({
+const { clientCtorCalls, loginMock, getDeviceListMock, lightbulbCtorCalls } = vi.hoisted(() => ({
   clientCtorCalls: [] as ClientOptionsCapture[],
   loginMock: vi.fn(),
   getDeviceListMock: vi.fn(),
+  lightbulbCtorCalls: [] as Array<{ devicecd: string; devicetypecd: string }>,
 }));
 
 vi.mock('../src/api/client.js', () => ({
@@ -29,6 +30,14 @@ vi.mock('../src/api/client.js', () => ({
       login: loginMock,
       getDeviceList: getDeviceListMock,
     };
+  }),
+}));
+
+vi.mock('../src/accessories/lightbulb.js', () => ({
+  LightbulbAccessory: vi.fn().mockImplementation((_api, _log, accessory) => {
+    const ctx = accessory.context as { devicecd: string; devicetypecd: string };
+    lightbulbCtorCalls.push({ devicecd: ctx.devicecd, devicetypecd: ctx.devicetypecd });
+    return {};
   }),
 }));
 
@@ -109,6 +118,7 @@ function flatten(args: unknown[]): string {
 beforeEach(async () => {
   storageDir = await mkdtemp(join(tmpdir(), 'hiot-platform-test-'));
   clientCtorCalls.length = 0;
+  lightbulbCtorCalls.length = 0;
   loginMock.mockReset();
   getDeviceListMock.mockReset();
 });
@@ -400,6 +410,72 @@ describe('HiotPlatform', () => {
     expect(infoText).toMatch(/1 new/);
     expect(infoText).not.toContain('LGT_SECRET_DEVICECD');
     expect(infoText).not.toContain('SECRET_DEVICENM');
+  });
+
+  it('attaches LightbulbAccessory only for LGT devicetypecd', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [
+        { devicecd: 'LGT_AAA', devicetypecd: 'LGT', devicenm: 'l1' },
+        { devicecd: 'LGT_BBB', devicetypecd: 'LGT', devicenm: 'l2' },
+        { devicecd: 'WSK_CCC', devicetypecd: 'WSK', devicenm: 'w1' },
+        { devicecd: 'HTR_DDD', devicetypecd: 'HTR', devicenm: 'h1' },
+      ],
+    });
+    const { platform } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    expect(lightbulbCtorCalls.map((c) => c.devicecd).sort()).toEqual(['LGT_AAA', 'LGT_BBB']);
+  });
+
+  it('attaches LightbulbAccessory to restored LGT accessories from cache', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [{ devicecd: 'LGT_AAA', devicetypecd: 'LGT', devicenm: 'l1' }],
+    });
+    const { platform, api } = makePlatform();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cached: any = {
+      displayName: 'l1',
+      UUID: 'UUID:LGT_AAA',
+      context: { devicecd: 'LGT_AAA', devicetypecd: 'LGT', devicenm: 'l1' },
+    };
+    platform.configureAccessory(cached);
+
+    await platform.handleDidFinishLaunching();
+
+    expect(api.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(lightbulbCtorCalls).toHaveLength(1);
+    expect(lightbulbCtorCalls[0].devicecd).toBe('LGT_AAA');
+  });
+
+  it('does not attach LightbulbAccessory twice for the same UUID', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [{ devicecd: 'LGT_AAA', devicetypecd: 'LGT', devicenm: 'l1' }],
+    });
+    const { platform } = makePlatform();
+    await platform.handleDidFinishLaunching();
+    await platform.handleDidFinishLaunching();
+
+    expect(lightbulbCtorCalls).toHaveLength(1);
+  });
+
+  it('logs Hi-oT LGT handler count at info level', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [
+        { devicecd: 'LGT_AAA', devicetypecd: 'LGT', devicenm: 'l1' },
+        { devicecd: 'WSK_BBB', devicetypecd: 'WSK', devicenm: 'w1' },
+      ],
+    });
+    const { platform, log } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    const infoText = log.info.mock.calls.map(flatten).join('\n');
+    expect(infoText).toMatch(/LGT handler attached:\s*1 device/);
+    expect(infoText).not.toContain('LGT_AAA');
   });
 
   it('never includes token or password in info/warn payloads', async () => {
