@@ -6,6 +6,7 @@ import type {
   PlatformConfig,
 } from 'homebridge';
 
+import { LightbulbAccessory } from './accessories/lightbulb.js';
 import { HiotClient, type HiotClientLogger } from './api/client.js';
 import type { Device } from './api/types.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
@@ -23,6 +24,7 @@ export interface HiotAccessoryContext {
 export class HiotPlatform implements DynamicPlatformPlugin {
   public readonly accessories: PlatformAccessory[] = [];
   private readonly accessoriesByUUID = new Map<string, PlatformAccessory>();
+  private readonly lightHandlersByUUID = new Map<string, LightbulbAccessory>();
 
   private readonly tokenStore: TokenStore;
   private readonly userid: string | undefined;
@@ -30,6 +32,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
   private readonly baseUrl: string;
   private readonly pushRegistrationToken: string | undefined;
   private readonly clientLogger: HiotClientLogger;
+  private client?: HiotClient;
 
   constructor(
     public readonly log: Logger,
@@ -73,7 +76,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
 
     const initialUserKeyValu = await this.tokenStore.load();
 
-    const client = new HiotClient({
+    this.client = new HiotClient({
       baseUrl: this.baseUrl,
       userid: this.userid,
       password: this.password,
@@ -88,8 +91,8 @@ export class HiotPlatform implements DynamicPlatformPlugin {
     });
 
     try {
-      await client.login();
-      const devices = await client.getDeviceList();
+      await this.client.login();
+      const devices = await this.client.getDeviceList();
       this.syncAccessories(devices.device ?? []);
     } catch (err) {
       this.log.error(`Hi-oT bootstrap failed: ${(err as Error).message}`);
@@ -115,6 +118,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       const cached = this.accessoriesByUUID.get(uuid);
       if (cached) {
         cached.context = { ...context };
+        this.attachHandler(cached);
         restored += 1;
         this.log.debug(
           `restored accessory devicecd=${device.devicecd} devicetypecd=${device.devicetypecd} spacenm=${device.spacenm ?? ''}`,
@@ -127,6 +131,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.accessories.push(accessory);
       this.accessoriesByUUID.set(uuid, accessory);
+      this.attachHandler(accessory);
       added += 1;
       this.log.debug(
         `registered accessory devicecd=${device.devicecd} devicetypecd=${device.devicetypecd} spacenm=${device.spacenm ?? ''}`,
@@ -143,6 +148,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, stale);
       for (const cached of stale) {
         this.accessoriesByUUID.delete(cached.UUID);
+        this.lightHandlersByUUID.delete(cached.UUID);
         const idx = this.accessories.indexOf(cached);
         if (idx >= 0) {
           this.accessories.splice(idx, 1);
@@ -154,5 +160,21 @@ export class HiotPlatform implements DynamicPlatformPlugin {
     this.log.info(
       `Hi-oT discovered ${devices.length} device(s) (${added} new, ${stale.length} removed, ${restored} restored).`,
     );
+    this.log.info(`Hi-oT LGT handler attached: ${this.lightHandlersByUUID.size} device(s)`);
+  }
+
+  private attachHandler(accessory: PlatformAccessory): void {
+    if (!this.client) {
+      return;
+    }
+    const ctx = accessory.context as HiotAccessoryContext;
+    if (ctx.devicetypecd !== 'LGT') {
+      return;
+    }
+    if (this.lightHandlersByUUID.has(accessory.UUID)) {
+      return;
+    }
+    const handler = new LightbulbAccessory(this.api, this.log, accessory, this.client);
+    this.lightHandlersByUUID.set(accessory.UUID, handler);
   }
 }
