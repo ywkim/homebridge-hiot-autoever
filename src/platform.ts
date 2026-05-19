@@ -62,13 +62,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       return;
     }
 
-    let initialUserKeyValu: string | undefined;
-    try {
-      initialUserKeyValu = await this.tokenStore.load();
-    } catch (err) {
-      // Token store failure should not block startup; fall back to plaintext login.
-      this.log.warn(`failed to load cached token: ${(err as Error).message}`);
-    }
+    const initialUserKeyValu = await this.tokenStore.load();
 
     const client = new HiotClient({
       baseUrl: this.baseUrl,
