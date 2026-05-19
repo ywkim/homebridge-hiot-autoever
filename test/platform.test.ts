@@ -71,8 +71,14 @@ function makeFakes(configOverrides: Record<string, unknown> = {}): {
   const api: FakeApi = {
     on: vi.fn(),
     user: { storagePath: () => storageDir },
-    hap: {},
-    platformAccessory: vi.fn(),
+    hap: {
+      uuid: { generate: vi.fn((s: string) => `UUID:${s}`) },
+    },
+    platformAccessory: vi.fn().mockImplementation((displayName: string, uuid: string) => ({
+      displayName,
+      UUID: uuid,
+      context: {} as Record<string, unknown>,
+    })),
     registerPlatformAccessories: vi.fn(),
     unregisterPlatformAccessories: vi.fn(),
   };
@@ -234,6 +240,166 @@ describe('HiotPlatform', () => {
     // Drain microtasks to ensure the fire-and-forget promise settles.
     await setImmediatePromise();
     await setImmediatePromise();
+  });
+
+  it('registers a new PlatformAccessory for each discovered device when cache is empty', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [
+        { devicecd: 'LGT_20250103085844_AAA', devicetypecd: 'LGT', devicenm: '거실1', spacenm: '거실' },
+        { devicecd: 'WSK_20250103085850_BBB', devicetypecd: 'WSK', devicenm: '거실2', spacenm: '거실' },
+      ],
+    });
+    const { platform, api } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    expect(api.platformAccessory).toHaveBeenCalledTimes(2);
+    expect(api.registerPlatformAccessories).toHaveBeenCalledTimes(2);
+    expect(api.unregisterPlatformAccessories).not.toHaveBeenCalled();
+    expect(platform.accessories).toHaveLength(2);
+
+    const first = platform.accessories[0];
+    expect(first.UUID).toBe('UUID:LGT_20250103085844_AAA');
+    expect(first.displayName).toBe('거실1');
+    expect(first.context).toEqual({
+      devicecd: 'LGT_20250103085844_AAA',
+      devicetypecd: 'LGT',
+      devicenm: '거실1',
+      spacenm: '거실',
+    });
+  });
+
+  it('restores cached accessory and updates its context without re-registering', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [
+        { devicecd: 'LGT_AAA', devicetypecd: 'LGT', devicenm: '새이름', spacenm: '거실' },
+      ],
+    });
+    const { platform, api } = makePlatform();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cached: any = {
+      displayName: '이전이름',
+      UUID: 'UUID:LGT_AAA',
+      context: { devicecd: 'LGT_AAA', devicetypecd: 'LGT', devicenm: '이전이름' },
+    };
+    platform.configureAccessory(cached);
+
+    await platform.handleDidFinishLaunching();
+
+    expect(api.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(api.unregisterPlatformAccessories).not.toHaveBeenCalled();
+    expect(platform.accessories).toHaveLength(1);
+    expect(cached.context).toEqual({
+      devicecd: 'LGT_AAA',
+      devicetypecd: 'LGT',
+      devicenm: '새이름',
+      spacenm: '거실',
+    });
+  });
+
+  it('unregisters cached accessory when no longer present in device list', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform, api } = makePlatform();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stale: any = {
+      displayName: 'gone',
+      UUID: 'UUID:GONE',
+      context: { devicecd: 'GONE', devicetypecd: 'LGT', devicenm: 'gone' },
+    };
+    platform.configureAccessory(stale);
+
+    await platform.handleDidFinishLaunching();
+
+    expect(api.unregisterPlatformAccessories).toHaveBeenCalledTimes(1);
+    expect(api.unregisterPlatformAccessories).toHaveBeenCalledWith(
+      'homebridge-hiot-autoever',
+      PLATFORM_NAME,
+      [stale],
+    );
+    expect(api.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(platform.accessories).toHaveLength(0);
+  });
+
+  it('handles mixed new + restored + removed in a single sync', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [
+        { devicecd: 'KEEP_AAA', devicetypecd: 'LGT', devicenm: 'keep' },
+        { devicecd: 'NEW_BBB', devicetypecd: 'WSK', devicenm: 'new' },
+      ],
+    });
+    const { platform, api } = makePlatform();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const keep: any = {
+      displayName: 'keep',
+      UUID: 'UUID:KEEP_AAA',
+      context: { devicecd: 'KEEP_AAA', devicetypecd: 'LGT', devicenm: 'keep' },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const gone: any = {
+      displayName: 'gone',
+      UUID: 'UUID:GONE_CCC',
+      context: { devicecd: 'GONE_CCC', devicetypecd: 'LGT', devicenm: 'gone' },
+    };
+    platform.configureAccessory(keep);
+    platform.configureAccessory(gone);
+
+    await platform.handleDidFinishLaunching();
+
+    expect(api.registerPlatformAccessories).toHaveBeenCalledTimes(1);
+    expect(api.unregisterPlatformAccessories).toHaveBeenCalledTimes(1);
+    expect(api.unregisterPlatformAccessories).toHaveBeenCalledWith(
+      'homebridge-hiot-autoever',
+      PLATFORM_NAME,
+      [gone],
+    );
+    expect(platform.accessories).toContain(keep);
+    expect(platform.accessories).not.toContain(gone);
+    expect(platform.accessories).toHaveLength(2);
+  });
+
+  it('makes no register/unregister calls when device list and cache are both empty', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform, api } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    expect(api.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(api.unregisterPlatformAccessories).not.toHaveBeenCalled();
+    expect(platform.accessories).toHaveLength(0);
+  });
+
+  it('does not attempt discovery when login fails', async () => {
+    loginMock.mockRejectedValue(new Error('auth failed'));
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform, api } = makePlatform();
+
+    await expect(platform.handleDidFinishLaunching()).resolves.toBeUndefined();
+    expect(api.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(api.unregisterPlatformAccessories).not.toHaveBeenCalled();
+    expect(api.platformAccessory).not.toHaveBeenCalled();
+  });
+
+  it('omits devicecd/devicenm from info-level discovery summary', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [
+        { devicecd: 'LGT_SECRET_DEVICECD', devicetypecd: 'LGT', devicenm: 'SECRET_DEVICENM' },
+      ],
+    });
+    const { platform, log } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    const infoText = log.info.mock.calls.map(flatten).join('\n');
+    expect(infoText).toMatch(/1 device\(s\)/);
+    expect(infoText).toMatch(/1 new/);
+    expect(infoText).not.toContain('LGT_SECRET_DEVICECD');
+    expect(infoText).not.toContain('SECRET_DEVICENM');
   });
 
   it('never includes token or password in info/warn payloads', async () => {
