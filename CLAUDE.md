@@ -38,5 +38,9 @@ PR은 신규/수정 코드에 테스트 없으면 CI 차단.
 - 로그 출력 금지: `userkeyvalu`, `JSESSIONID`, 평문 패스워드
   - TODO: pino redact paths 설정 (API client worktree에서 구현)
 - 테스트 fixture: 캡처 사용 시 식별 정보 마스킹
-- GDK 가스밸브: **Discovery 자체에서 제외** (HomeKit 미노출).
-  안전 보장(우발 열기 차단) + UX 정리(빈 accessory 제거). handler 구현 시에도 HomeKit `Characteristic.Active = ACTIVE` (값 `1`) 명령은 무조건 차단.
+
+## 노출 원칙
+
+**Hi-oT 앱이 노출하는 모든 기능을 HomeKit에 1:1 미러링.** plugin은 단순 미러 역할이며, 가스밸브 lock/unlock·EV호출·일괄소등 등 안전 영향이 큰 동작도 차단 가드 없이 그대로 노출한다. 안전 책임은 Hi-oT 앱과 동일하게 사용자가 진다.
+
+이 원칙은 plugin scope·정책 의사결정의 단순화를 위한 1차 기준이다. 별도 trade-off가 발생하면 PR 단위로 논의.
