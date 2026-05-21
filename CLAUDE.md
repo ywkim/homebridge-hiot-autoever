@@ -39,4 +39,4 @@ PR은 신규/수정 코드에 테스트 없으면 CI 차단.
   - TODO: pino redact paths 설정 (API client worktree에서 구현)
 - 테스트 fixture: 캡처 사용 시 식별 정보 마스킹
 - GDK 가스밸브: **Discovery 자체에서 제외** (HomeKit 미노출).
-  안전 보장(우발 열기 차단) + UX 정리(빈 accessory 제거). handler 구현 시에도 `Active=Active` 명령은 무조건 차단.
+  안전 보장(우발 열기 차단) + UX 정리(빈 accessory 제거). handler 구현 시에도 HomeKit `Characteristic.Active = ACTIVE` (값 `1`) 명령은 무조건 차단.
