@@ -16,11 +16,12 @@ interface ClientOptionsCapture {
   onTokenUpdate?: (token: string) => void;
 }
 
-const { clientCtorCalls, loginMock, getDeviceListMock, lightbulbCtorCalls } = vi.hoisted(() => ({
+const { clientCtorCalls, loginMock, getDeviceListMock, lightbulbCtorCalls, wskCtorCalls } = vi.hoisted(() => ({
   clientCtorCalls: [] as ClientOptionsCapture[],
   loginMock: vi.fn(),
   getDeviceListMock: vi.fn(),
   lightbulbCtorCalls: [] as Array<{ devicecd: string; devicetypecd: string }>,
+  wskCtorCalls: [] as Array<{ devicecd: string }>,
 }));
 
 vi.mock('../src/api/client.js', () => ({
@@ -41,6 +42,7 @@ vi.mock('../src/accessories/lightbulb.js', () => ({
   }),
 }));
 
+import { HANDLER_REGISTRY, type AccessoryHandlerCtor } from '../src/accessories/registry.js';
 import { HiotPlatform } from '../src/platform.js';
 import { TokenStore } from '../src/storage/tokenStore.js';
 
@@ -119,6 +121,7 @@ beforeEach(async () => {
   storageDir = await mkdtemp(join(tmpdir(), 'hiot-platform-test-'));
   clientCtorCalls.length = 0;
   lightbulbCtorCalls.length = 0;
+  wskCtorCalls.length = 0;
   loginMock.mockReset();
   getDeviceListMock.mockReset();
 });
@@ -462,7 +465,7 @@ describe('HiotPlatform', () => {
     expect(lightbulbCtorCalls).toHaveLength(1);
   });
 
-  it('logs Hi-oT LGT handler count at info level', async () => {
+  it('logs handler attach summary grouped by devicetypecd at info level', async () => {
     loginMock.mockResolvedValue({});
     getDeviceListMock.mockResolvedValue({
       device: [
@@ -474,8 +477,49 @@ describe('HiotPlatform', () => {
     await platform.handleDidFinishLaunching();
 
     const infoText = log.info.mock.calls.map(flatten).join('\n');
-    expect(infoText).toMatch(/LGT handler attached:\s*1 device/);
+    expect(infoText).toMatch(/handlers attached:\s*LGT=1/);
     expect(infoText).not.toContain('LGT_AAA');
+  });
+
+  it('logs "none" when no handler is attached', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [{ devicecd: 'WSK_BBB', devicetypecd: 'WSK', devicenm: 'w1' }],
+    });
+    const { platform, log } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    const infoText = log.info.mock.calls.map(flatten).join('\n');
+    expect(infoText).toMatch(/handlers attached:\s*none/);
+  });
+
+  it('attaches handler for non-LGT type when registered in HANDLER_REGISTRY', async () => {
+    const WSKStub = vi.fn().mockImplementation((_api, _log, accessory, _client) => {
+      const ctx = accessory.context as { devicecd: string };
+      wskCtorCalls.push({ devicecd: ctx.devicecd });
+      return {};
+    }) as unknown as AccessoryHandlerCtor;
+    HANDLER_REGISTRY.WSK = WSKStub;
+    try {
+      loginMock.mockResolvedValue({});
+      getDeviceListMock.mockResolvedValue({
+        device: [
+          { devicecd: 'LGT_AAA', devicetypecd: 'LGT', devicenm: 'l1' },
+          { devicecd: 'WSK_BBB', devicetypecd: 'WSK', devicenm: 'w1' },
+          { devicecd: 'HTR_CCC', devicetypecd: 'HTR', devicenm: 'h1' },
+        ],
+      });
+      const { platform, log } = makePlatform();
+      await platform.handleDidFinishLaunching();
+
+      expect(wskCtorCalls.map((c) => c.devicecd)).toEqual(['WSK_BBB']);
+      expect(lightbulbCtorCalls.map((c) => c.devicecd)).toEqual(['LGT_AAA']);
+      const infoText = log.info.mock.calls.map(flatten).join('\n');
+      expect(infoText).toMatch(/handlers attached:.*LGT=1/);
+      expect(infoText).toMatch(/handlers attached:.*WSK=1/);
+    } finally {
+      delete HANDLER_REGISTRY.WSK;
+    }
   });
 
   it('never includes token or password in info/warn payloads', async () => {
