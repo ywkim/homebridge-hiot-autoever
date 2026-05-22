@@ -37,20 +37,19 @@ class FakeHapStatusError extends Error {
 interface CharStub {
   onGet: ReturnType<typeof vi.fn>;
   onSet: ReturnType<typeof vi.fn>;
-  getHandler?: () => unknown;
   setHandler?: (v: unknown) => unknown;
 }
 
 interface ServiceStub {
   setCharacteristic: ReturnType<typeof vi.fn>;
   getCharacteristic: ReturnType<typeof vi.fn>;
+  updateCharacteristic: ReturnType<typeof vi.fn>;
   chars: Map<unknown, CharStub>;
 }
 
 function makeChar(): CharStub {
   const c: CharStub = {
-    onGet: vi.fn().mockImplementation(function (this: CharStub, fn: () => unknown) {
-      c.getHandler = fn;
+    onGet: vi.fn().mockImplementation(function (this: CharStub) {
       return c;
     }),
     onSet: vi.fn().mockImplementation(function (this: CharStub, fn: (v: unknown) => unknown) {
@@ -75,6 +74,9 @@ function makeService(): ServiceStub {
         chars.set(id, c);
       }
       return c;
+    }),
+    updateCharacteristic: vi.fn().mockImplementation(function (this: ServiceStub) {
+      return svc;
     }),
   };
   return svc;
@@ -129,13 +131,11 @@ function makeLog() {
 }
 
 interface ClientStub {
-  getDevice: ReturnType<typeof vi.fn>;
   exeDeviceBatch: ReturnType<typeof vi.fn>;
 }
 
 function makeClient(): ClientStub {
   return {
-    getDevice: vi.fn(),
     exeDeviceBatch: vi.fn(),
   };
 }
@@ -164,11 +164,16 @@ beforeEach(() => {
 });
 
 describe('FanAccessory', () => {
-  it('adds Fanv2 service and registers Active characteristic handlers', () => {
+  it('adds Fanv2 service and registers only onSet for Active (no onGet, background-poll pattern)', () => {
     const { svc, active } = setup();
     expect(svc).toBeDefined();
-    expect(active.onGet).toHaveBeenCalledTimes(1);
+    expect(active.onGet).not.toHaveBeenCalled();
     expect(active.onSet).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes devicecd for the poller', () => {
+    const { handler } = setup();
+    expect(handler.devicecd).toBe('VNT_TEST_001');
   });
 
   it('sets AccessoryInformation Manufacturer / Model / SerialNumber', () => {
@@ -185,7 +190,6 @@ describe('FanAccessory', () => {
     const api = makeApi();
     const log = makeLog();
     const accessory = makeAccessory({ ...CONTEXT });
-    // Pre-attach a Fanv2 service on the cached accessory.
     const preexisting = makeService();
     accessory.services.set(ServiceId.Fanv2, preexisting);
 
@@ -197,46 +201,31 @@ describe('FanAccessory', () => {
     expect(preexisting.getCharacteristic).toHaveBeenCalledWith(api.hap.Characteristic.Active);
   });
 
-  it('onGet returns ACTIVE when device power is "on"', async () => {
-    const { active, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'on' }] });
-
-    const result = await active.getHandler!();
-    expect(result).toBe(ActiveValue.ACTIVE);
-    expect(client.getDevice).toHaveBeenCalledWith('VNT_TEST_001');
+  it('updateState pushes Active=ACTIVE when power is "on"', () => {
+    const { handler, svc, api } = setup();
+    handler.updateState({ operation: [{ power: 'on' }] });
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(api.hap.Characteristic.Active, ActiveValue.ACTIVE);
   });
 
-  it('onGet returns INACTIVE when device power is "off"', async () => {
-    const { active, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'off' }] });
-    expect(await active.getHandler!()).toBe(ActiveValue.INACTIVE);
+  it('updateState pushes Active=INACTIVE when power is "off"', () => {
+    const { handler, svc, api } = setup();
+    handler.updateState({ operation: [{ power: 'off' }] });
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(api.hap.Characteristic.Active, ActiveValue.INACTIVE);
   });
 
-  it('onGet throws NOT_RESPONDING when operation is missing', async () => {
-    const { active, client, log } = setup();
-    client.getDevice.mockResolvedValue({});
-    await expect(active.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-    await expect(active.getHandler!()).rejects.toMatchObject({
-      hapStatus: HAPStatus.SERVICE_COMMUNICATION_FAILURE,
-    });
+  it('updateState marks Not Responding when operation array missing', () => {
+    const { handler, svc, log } = setup();
+    handler.updateState({});
+    const [, value] = svc.updateCharacteristic.mock.calls.at(-1)!;
+    expect(value).toBeInstanceOf(FakeHapStatusError);
     expect(log.warn).toHaveBeenCalled();
   });
 
-  it('onGet throws NOT_RESPONDING when power field is missing', async () => {
-    const { active, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{}] });
-    await expect(active.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-  });
-
-  it('onGet throws HapStatusError NOT_RESPONDING when API call fails', async () => {
-    const { active, client, log } = setup();
-    client.getDevice.mockRejectedValue(new Error('boom'));
-
-    await expect(active.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-    await expect(active.getHandler!()).rejects.toMatchObject({
-      hapStatus: HAPStatus.SERVICE_COMMUNICATION_FAILURE,
-    });
-    expect(log.warn).toHaveBeenCalled();
+  it('updateState marks Not Responding when power field missing', () => {
+    const { handler, svc } = setup();
+    handler.updateState({ operation: [{}] });
+    const [, value] = svc.updateCharacteristic.mock.calls.at(-1)!;
+    expect(value).toBeInstanceOf(FakeHapStatusError);
   });
 
   it('onSet(ACTIVE) issues exeDeviceBatch with value "on"', async () => {

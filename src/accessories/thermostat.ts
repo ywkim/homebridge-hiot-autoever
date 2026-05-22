@@ -9,14 +9,16 @@ import type {
 import type { HiotClient } from '../api/client.js';
 import type { DeviceCommand, DeviceResponse } from '../api/types.js';
 import type { HiotAccessoryContext } from '../platform.js';
+import type { PollableHandler } from '../poller.js';
 
 const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
 
 /**
  * Maps a Hi-oT HTR (heating) device to a HomeKit Thermostat service.
  *
- * Reads `temperature[0].current/desired` and `operation[0].power` from
- * `client.getDevice` and writes back via `client.exeDeviceBatch`.
+ * Reads happen through the platform's background poller, which calls
+ * {@link ThermostatAccessory.updateState} on each tick. Writes hit the
+ * backend immediately via `client.exeDeviceBatch`.
  *
  * Intentional first-cut limits:
  *   - integer °C only (15–30, minStep 1)
@@ -26,7 +28,8 @@ const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
  * (`resource: 'temperature', attribute: 'desired'`); confirm against a capture
  * before relying on it in mission-critical scenarios.
  */
-export class ThermostatAccessory {
+export class ThermostatAccessory implements PollableHandler {
+  public readonly devicecd: string;
   private readonly service: Service;
 
   constructor(
@@ -37,6 +40,7 @@ export class ThermostatAccessory {
   ) {
     const { Service: HapService, Characteristic } = this.api.hap;
     const ctx = this.context();
+    this.devicecd = ctx.devicecd;
 
     const info =
       this.accessory.getService(HapService.AccessoryInformation) ??
@@ -51,18 +55,9 @@ export class ThermostatAccessory {
       this.accessory.addService(HapService.Thermostat);
 
     this.service
-      .getCharacteristic(Characteristic.CurrentTemperature)
-      .onGet(this.handleCurrentTemperatureGet.bind(this));
-
-    this.service
       .getCharacteristic(Characteristic.TargetTemperature)
       .setProps({ minValue: 15, maxValue: 30, minStep: 1 })
-      .onGet(this.handleTargetTemperatureGet.bind(this))
       .onSet(this.handleTargetTemperatureSet.bind(this));
-
-    this.service
-      .getCharacteristic(Characteristic.CurrentHeatingCoolingState)
-      .onGet(this.handleCurrentHeatingCoolingStateGet.bind(this));
 
     this.service
       .getCharacteristic(Characteristic.TargetHeatingCoolingState)
@@ -72,7 +67,6 @@ export class ThermostatAccessory {
           Characteristic.TargetHeatingCoolingState.HEAT,
         ],
       })
-      .onGet(this.handleTargetHeatingCoolingStateGet.bind(this))
       .onSet(this.handleTargetHeatingCoolingStateSet.bind(this));
   }
 
@@ -85,65 +79,54 @@ export class ThermostatAccessory {
     return new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
-  private async fetchState(): Promise<DeviceResponse> {
-    const ctx = this.context();
-    try {
-      return await this.client.getDevice(ctx.devicecd);
-    } catch (err) {
-      this.log.warn(`HTR getDevice failed for devicetypecd=${ctx.devicetypecd}: ${(err as Error).message}`);
-      throw this.notResponding();
-    }
-  }
-
-  private parseTemperature(raw: string | undefined, label: string): number {
-    const ctx = this.context();
+  private parseTemperature(raw: string | undefined): number | undefined {
     if (raw === undefined) {
-      this.log.warn(`HTR ${label} field missing for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
+      return undefined;
     }
     const n = parseFloat(raw);
-    if (!Number.isFinite(n)) {
-      this.log.warn(`HTR ${label} field not numeric ("${raw}") for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
-    }
-    return n;
+    return Number.isFinite(n) ? n : undefined;
   }
 
-  private powerToHeatingState(power: string | undefined, label: string): 'on' | 'off' {
+  updateState(res: DeviceResponse): void {
+    const { Characteristic } = this.api.hap;
     const ctx = this.context();
-    if (power === undefined) {
-      this.log.warn(`HTR ${label}: power field missing for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
+
+    const current = this.parseTemperature(res.temperature?.[0]?.current);
+    if (current === undefined) {
+      this.log.warn(`HTR poll: current temperature missing/invalid for devicetypecd=${ctx.devicetypecd}`);
+      this.service.updateCharacteristic(Characteristic.CurrentTemperature, this.notResponding());
+    } else {
+      this.service.updateCharacteristic(Characteristic.CurrentTemperature, current);
     }
-    return power === 'on' ? 'on' : 'off';
-  }
 
-  private async handleCurrentTemperatureGet(): Promise<CharacteristicValue> {
-    const res = await this.fetchState();
-    return this.parseTemperature(res.temperature?.[0]?.current, 'current temperature');
-  }
+    const desired = this.parseTemperature(res.temperature?.[0]?.desired);
+    if (desired === undefined) {
+      this.log.warn(`HTR poll: target temperature missing/invalid for devicetypecd=${ctx.devicetypecd}`);
+      this.service.updateCharacteristic(Characteristic.TargetTemperature, this.notResponding());
+    } else {
+      this.service.updateCharacteristic(Characteristic.TargetTemperature, desired);
+    }
 
-  private async handleTargetTemperatureGet(): Promise<CharacteristicValue> {
-    const res = await this.fetchState();
-    return this.parseTemperature(res.temperature?.[0]?.desired, 'target temperature');
-  }
-
-  private async handleCurrentHeatingCoolingStateGet(): Promise<CharacteristicValue> {
-    const { Characteristic } = this.api.hap;
-    const res = await this.fetchState();
-    const power = this.powerToHeatingState(res.operation?.[0]?.power, 'current state');
-    return power === 'on'
-      ? Characteristic.CurrentHeatingCoolingState.HEAT
-      : Characteristic.CurrentHeatingCoolingState.OFF;
-  }
-
-  private async handleTargetHeatingCoolingStateGet(): Promise<CharacteristicValue> {
-    const { Characteristic } = this.api.hap;
-    const res = await this.fetchState();
-    const power = this.powerToHeatingState(res.operation?.[0]?.power, 'target state');
-    return power === 'on'
-      ? Characteristic.TargetHeatingCoolingState.HEAT
-      : Characteristic.TargetHeatingCoolingState.OFF;
+    const power = res.operation?.[0]?.power;
+    if (power === undefined) {
+      this.log.warn(`HTR poll: power field missing for devicetypecd=${ctx.devicetypecd}`);
+      const err = this.notResponding();
+      this.service.updateCharacteristic(Characteristic.CurrentHeatingCoolingState, err);
+      this.service.updateCharacteristic(Characteristic.TargetHeatingCoolingState, err);
+    } else {
+      this.service.updateCharacteristic(
+        Characteristic.CurrentHeatingCoolingState,
+        power === 'on'
+          ? Characteristic.CurrentHeatingCoolingState.HEAT
+          : Characteristic.CurrentHeatingCoolingState.OFF,
+      );
+      this.service.updateCharacteristic(
+        Characteristic.TargetHeatingCoolingState,
+        power === 'on'
+          ? Characteristic.TargetHeatingCoolingState.HEAT
+          : Characteristic.TargetHeatingCoolingState.OFF,
+      );
+    }
   }
 
   private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {

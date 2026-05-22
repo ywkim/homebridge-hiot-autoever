@@ -16,13 +16,34 @@ interface ClientOptionsCapture {
   onTokenUpdate?: (token: string) => void;
 }
 
-const { clientCtorCalls, loginMock, getDeviceListMock, lightbulbCtorCalls, thermostatCtorCalls, wskCtorCalls } = vi.hoisted(() => ({
+interface PollerCtorCapture {
+  intervalMs: number;
+}
+
+const {
+  clientCtorCalls,
+  loginMock,
+  getDeviceListMock,
+  lightbulbCtorCalls,
+  thermostatCtorCalls,
+  wskCtorCalls,
+  pollerCtorCalls,
+  pollerStartMock,
+  pollerStopMock,
+  pollerRegisterMock,
+  pollerUnregisterMock,
+} = vi.hoisted(() => ({
   clientCtorCalls: [] as ClientOptionsCapture[],
   loginMock: vi.fn(),
   getDeviceListMock: vi.fn(),
   lightbulbCtorCalls: [] as Array<{ devicecd: string; devicetypecd: string }>,
   thermostatCtorCalls: [] as Array<{ devicecd: string; devicetypecd: string }>,
   wskCtorCalls: [] as Array<{ devicecd: string }>,
+  pollerCtorCalls: [] as PollerCtorCapture[],
+  pollerStartMock: vi.fn(),
+  pollerStopMock: vi.fn(),
+  pollerRegisterMock: vi.fn(),
+  pollerUnregisterMock: vi.fn(),
 }));
 
 vi.mock('../src/api/client.js', () => ({
@@ -39,7 +60,7 @@ vi.mock('../src/accessories/lightbulb.js', () => ({
   LightbulbAccessory: vi.fn().mockImplementation((_api, _log, accessory) => {
     const ctx = accessory.context as { devicecd: string; devicetypecd: string };
     lightbulbCtorCalls.push({ devicecd: ctx.devicecd, devicetypecd: ctx.devicetypecd });
-    return {};
+    return { devicecd: ctx.devicecd, updateState: vi.fn() };
   }),
 }));
 
@@ -47,7 +68,7 @@ vi.mock('../src/accessories/outlet.js', () => ({
   OutletAccessory: vi.fn().mockImplementation((_api, _log, accessory) => {
     const ctx = accessory.context as { devicecd: string };
     wskCtorCalls.push({ devicecd: ctx.devicecd });
-    return {};
+    return { devicecd: ctx.devicecd, updateState: vi.fn() };
   }),
 }));
 
@@ -55,7 +76,19 @@ vi.mock('../src/accessories/thermostat.js', () => ({
   ThermostatAccessory: vi.fn().mockImplementation((_api, _log, accessory) => {
     const ctx = accessory.context as { devicecd: string; devicetypecd: string };
     thermostatCtorCalls.push({ devicecd: ctx.devicecd, devicetypecd: ctx.devicetypecd });
-    return {};
+    return { devicecd: ctx.devicecd, updateState: vi.fn() };
+  }),
+}));
+
+vi.mock('../src/poller.js', () => ({
+  HiotPoller: vi.fn().mockImplementation((_client, _log, intervalMs: number) => {
+    pollerCtorCalls.push({ intervalMs });
+    return {
+      start: pollerStartMock,
+      stop: pollerStopMock,
+      register: pollerRegisterMock,
+      unregister: pollerUnregisterMock,
+    };
   }),
 }));
 
@@ -140,8 +173,13 @@ beforeEach(async () => {
   lightbulbCtorCalls.length = 0;
   thermostatCtorCalls.length = 0;
   wskCtorCalls.length = 0;
+  pollerCtorCalls.length = 0;
   loginMock.mockReset();
   getDeviceListMock.mockReset();
+  pollerStartMock.mockReset();
+  pollerStopMock.mockReset();
+  pollerRegisterMock.mockReset();
+  pollerUnregisterMock.mockReset();
 });
 
 afterEach(async () => {
@@ -540,6 +578,81 @@ describe('HiotPlatform', () => {
     } finally {
       delete HANDLER_REGISTRY.WSK;
     }
+  });
+
+  it('constructs HiotPoller with default 30_000 ms when config omits pollingIntervalMs', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    expect(pollerCtorCalls).toHaveLength(1);
+    expect(pollerCtorCalls[0].intervalMs).toBe(30_000);
+  });
+
+  it('honors configured pollingIntervalMs', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform } = makePlatform({ pollingIntervalMs: 15_000 });
+    await platform.handleDidFinishLaunching();
+
+    expect(pollerCtorCalls[0].intervalMs).toBe(15_000);
+  });
+
+  it('clamps pollingIntervalMs below the 5000 ms minimum', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform, log } = makePlatform({ pollingIntervalMs: 100 });
+    await platform.handleDidFinishLaunching();
+
+    expect(pollerCtorCalls[0].intervalMs).toBe(5_000);
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it('registers each attached handler with the poller and starts it', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({
+      device: [
+        { devicecd: 'LGT_AAA', devicetypecd: 'LGT', devicenm: 'l1' },
+        { devicecd: 'HTR_BBB', devicetypecd: 'HTR', devicenm: 'h1' },
+      ],
+    });
+    const { platform } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    expect(pollerRegisterMock).toHaveBeenCalledTimes(2);
+    const registeredDevicecds = pollerRegisterMock.mock.calls.map(
+      (c) => (c[1] as { devicecd: string }).devicecd,
+    );
+    expect(registeredDevicecds.sort()).toEqual(['HTR_BBB', 'LGT_AAA']);
+    expect(pollerStartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start the poller when bootstrap fails before device discovery', async () => {
+    loginMock.mockRejectedValue(new Error('auth failed'));
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    expect(pollerStartMock).not.toHaveBeenCalled();
+  });
+
+  it('unregisters stale handler from the poller when a device disappears', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform } = makePlatform();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stale: any = {
+      displayName: 'gone',
+      UUID: 'UUID:GONE',
+      context: { devicecd: 'GONE', devicetypecd: 'LGT', devicenm: 'gone' },
+    };
+    platform.configureAccessory(stale);
+
+    await platform.handleDidFinishLaunching();
+
+    expect(pollerUnregisterMock).toHaveBeenCalledWith('UUID:GONE');
   });
 
   it('never includes token or password in info/warn payloads', async () => {

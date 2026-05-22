@@ -43,20 +43,19 @@ interface CharStub {
   onGet: ReturnType<typeof vi.fn>;
   onSet: ReturnType<typeof vi.fn>;
   setProps: ReturnType<typeof vi.fn>;
-  getHandler?: () => unknown;
   setHandler?: (v: unknown) => unknown;
 }
 
 interface ServiceStub {
   setCharacteristic: ReturnType<typeof vi.fn>;
   getCharacteristic: ReturnType<typeof vi.fn>;
+  updateCharacteristic: ReturnType<typeof vi.fn>;
   chars: Map<unknown, CharStub>;
 }
 
 function makeChar(): CharStub {
   const c: CharStub = {
-    onGet: vi.fn().mockImplementation(function (this: CharStub, fn: () => unknown) {
-      c.getHandler = fn;
+    onGet: vi.fn().mockImplementation(function (this: CharStub) {
       return c;
     }),
     onSet: vi.fn().mockImplementation(function (this: CharStub, fn: (v: unknown) => unknown) {
@@ -84,6 +83,9 @@ function makeService(): ServiceStub {
         chars.set(id, c);
       }
       return c;
+    }),
+    updateCharacteristic: vi.fn().mockImplementation(function (this: ServiceStub) {
+      return svc;
     }),
   };
   return svc;
@@ -138,13 +140,11 @@ function makeLog() {
 }
 
 interface ClientStub {
-  getDevice: ReturnType<typeof vi.fn>;
   exeDeviceBatch: ReturnType<typeof vi.fn>;
 }
 
 function makeClient(): ClientStub {
   return {
-    getDevice: vi.fn(),
     exeDeviceBatch: vi.fn(),
   };
 }
@@ -164,11 +164,9 @@ function setup() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handler = new ThermostatAccessory(api as any, log as any, accessory as any, client as any);
   const svc = accessory.services.get(ServiceId.Thermostat)!;
-  const currentTemp = svc.chars.get(CharId.CurrentTemperature)!;
   const targetTemp = svc.chars.get(CharId.TargetTemperature)!;
-  const currentState = svc.chars.get(CharId.CurrentHeatingCoolingState)!;
   const targetState = svc.chars.get(CharId.TargetHeatingCoolingState)!;
-  return { api, log, accessory, client, handler, svc, currentTemp, targetTemp, currentState, targetState };
+  return { api, log, accessory, client, handler, svc, targetTemp, targetState };
 }
 
 beforeEach(() => {
@@ -176,15 +174,21 @@ beforeEach(() => {
 });
 
 describe('ThermostatAccessory', () => {
-  it('adds Thermostat service and registers handlers for all four characteristics', () => {
-    const { svc, currentTemp, targetTemp, currentState, targetState } = setup();
+  it('adds Thermostat service; only TargetTemperature/TargetHeatingCoolingState are wired (background-poll pattern)', () => {
+    const { svc, targetTemp, targetState } = setup();
     expect(svc).toBeDefined();
-    expect(currentTemp.onGet).toHaveBeenCalledTimes(1);
-    expect(targetTemp.onGet).toHaveBeenCalledTimes(1);
+    // Current* characteristics are never wired in the constructor; the poller pushes values.
+    expect(svc.getCharacteristic).not.toHaveBeenCalledWith(CharId.CurrentTemperature);
+    expect(svc.getCharacteristic).not.toHaveBeenCalledWith(CharId.CurrentHeatingCoolingState);
+    expect(targetTemp.onGet).not.toHaveBeenCalled();
     expect(targetTemp.onSet).toHaveBeenCalledTimes(1);
-    expect(currentState.onGet).toHaveBeenCalledTimes(1);
-    expect(targetState.onGet).toHaveBeenCalledTimes(1);
+    expect(targetState.onGet).not.toHaveBeenCalled();
     expect(targetState.onSet).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes devicecd for the poller', () => {
+    const { handler } = setup();
+    expect(handler.devicecd).toBe('HTR_TEST_001');
   });
 
   it('sets AccessoryInformation Manufacturer / Model / SerialNumber', () => {
@@ -209,7 +213,6 @@ describe('ThermostatAccessory', () => {
     new ThermostatAccessory(api as any, log as any, accessory as any, client as any);
 
     expect(accessory.addService).not.toHaveBeenCalledWith(ServiceId.Thermostat);
-    expect(preexisting.getCharacteristic).toHaveBeenCalledWith(CharId.CurrentTemperature);
     expect(preexisting.getCharacteristic).toHaveBeenCalledWith(CharId.TargetTemperature);
   });
 
@@ -225,73 +228,84 @@ describe('ThermostatAccessory', () => {
     });
   });
 
-  it('CurrentTemperature onGet parses temperature[0].current as float', async () => {
-    const { currentTemp, client } = setup();
-    client.getDevice.mockResolvedValue({
+  // --- updateState ----------------------------------------------------------
+
+  it('updateState pushes parsed CurrentTemperature and TargetTemperature', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
       temperature: [{ current: '22', desired: '24' }],
       operation: [{ power: 'on' }],
     });
-    expect(await currentTemp.getHandler!()).toBe(22);
-    expect(client.getDevice).toHaveBeenCalledWith('HTR_TEST_001');
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.CurrentTemperature, 22);
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.TargetTemperature, 24);
   });
 
-  it('TargetTemperature onGet parses temperature[0].desired as float', async () => {
-    const { targetTemp, client } = setup();
-    client.getDevice.mockResolvedValue({
+  it('updateState pushes HEAT for both states when power=on', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
       temperature: [{ current: '22', desired: '24' }],
       operation: [{ power: 'on' }],
     });
-    expect(await targetTemp.getHandler!()).toBe(24);
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(
+      CharId.CurrentHeatingCoolingState,
+      HeatingCoolingState.HEAT,
+    );
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(
+      CharId.TargetHeatingCoolingState,
+      HeatingCoolingState.HEAT,
+    );
   });
 
-  it('CurrentHeatingCoolingState onGet returns HEAT when power=on', async () => {
-    const { currentState, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'on' }] });
-    expect(await currentState.getHandler!()).toBe(HeatingCoolingState.HEAT);
-  });
-
-  it('CurrentHeatingCoolingState onGet returns OFF when power=off', async () => {
-    const { currentState, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'off' }] });
-    expect(await currentState.getHandler!()).toBe(HeatingCoolingState.OFF);
-  });
-
-  it('TargetHeatingCoolingState onGet returns HEAT/OFF mirroring power', async () => {
-    const { targetState, client } = setup();
-    client.getDevice.mockResolvedValueOnce({ operation: [{ power: 'on' }] });
-    expect(await targetState.getHandler!()).toBe(HeatingCoolingState.HEAT);
-    client.getDevice.mockResolvedValueOnce({ operation: [{ power: 'off' }] });
-    expect(await targetState.getHandler!()).toBe(HeatingCoolingState.OFF);
-  });
-
-  it('CurrentTemperature onGet throws NOT_RESPONDING when temperature array missing', async () => {
-    const { currentTemp, client, log } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'on' }] });
-    await expect(currentTemp.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-    await expect(currentTemp.getHandler!()).rejects.toMatchObject({
-      hapStatus: HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+  it('updateState pushes OFF for both states when power=off', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
+      temperature: [{ current: '22', desired: '24' }],
+      operation: [{ power: 'off' }],
     });
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(
+      CharId.CurrentHeatingCoolingState,
+      HeatingCoolingState.OFF,
+    );
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(
+      CharId.TargetHeatingCoolingState,
+      HeatingCoolingState.OFF,
+    );
+  });
+
+  it('updateState marks CurrentTemperature Not Responding when temperature array missing', () => {
+    const { handler, svc, log } = setup();
+    handler.updateState({ operation: [{ power: 'on' }] });
+    const errCalls = svc.updateCharacteristic.mock.calls.filter(
+      ([, v]) => v instanceof FakeHapStatusError,
+    );
+    expect(errCalls.map(([c]) => c)).toContain(CharId.CurrentTemperature);
     expect(log.warn).toHaveBeenCalled();
   });
 
-  it('CurrentTemperature onGet throws NOT_RESPONDING when current field is not numeric', async () => {
-    const { currentTemp, client } = setup();
-    client.getDevice.mockResolvedValue({ temperature: [{ current: 'oops' }] });
-    await expect(currentTemp.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
+  it('updateState marks CurrentTemperature Not Responding when current is not numeric', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
+      temperature: [{ current: 'oops', desired: '24' }],
+      operation: [{ power: 'on' }],
+    });
+    const errCalls = svc.updateCharacteristic.mock.calls.filter(
+      ([, v]) => v instanceof FakeHapStatusError,
+    );
+    expect(errCalls.map(([c]) => c)).toContain(CharId.CurrentTemperature);
   });
 
-  it('CurrentHeatingCoolingState onGet throws when power field missing', async () => {
-    const { currentState, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{}] });
-    await expect(currentState.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
+  it('updateState marks heating-cooling states Not Responding when power missing', () => {
+    const { handler, svc } = setup();
+    handler.updateState({ temperature: [{ current: '22', desired: '24' }] });
+    const errCalls = svc.updateCharacteristic.mock.calls.filter(
+      ([, v]) => v instanceof FakeHapStatusError,
+    );
+    expect(errCalls.map(([c]) => c)).toEqual(
+      expect.arrayContaining([CharId.CurrentHeatingCoolingState, CharId.TargetHeatingCoolingState]),
+    );
   });
 
-  it('CurrentTemperature onGet throws NOT_RESPONDING when API fails', async () => {
-    const { currentTemp, client, log } = setup();
-    client.getDevice.mockRejectedValue(new Error('boom'));
-    await expect(currentTemp.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-    expect(log.warn).toHaveBeenCalled();
-  });
+  // --- onSet ---------------------------------------------------------------
 
   it('TargetTemperature onSet issues exeDeviceBatch with rounded integer string', async () => {
     const { targetTemp, client } = setup();

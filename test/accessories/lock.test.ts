@@ -36,7 +36,6 @@ interface CharStub {
   onGet: ReturnType<typeof vi.fn>;
   onSet: ReturnType<typeof vi.fn>;
   setProps: ReturnType<typeof vi.fn>;
-  getHandler?: () => unknown;
   setHandler?: (v: unknown) => unknown;
   props?: Record<string, unknown>;
 }
@@ -44,13 +43,13 @@ interface CharStub {
 interface ServiceStub {
   setCharacteristic: ReturnType<typeof vi.fn>;
   getCharacteristic: ReturnType<typeof vi.fn>;
+  updateCharacteristic: ReturnType<typeof vi.fn>;
   chars: Map<unknown, CharStub>;
 }
 
 function makeChar(): CharStub {
   const c: CharStub = {
-    onGet: vi.fn().mockImplementation(function (this: CharStub, fn: () => unknown) {
-      c.getHandler = fn;
+    onGet: vi.fn().mockImplementation(function (this: CharStub) {
       return c;
     }),
     onSet: vi.fn().mockImplementation(function (this: CharStub, fn: (v: unknown) => unknown) {
@@ -79,6 +78,9 @@ function makeService(): ServiceStub {
         chars.set(id, c);
       }
       return c;
+    }),
+    updateCharacteristic: vi.fn().mockImplementation(function (this: ServiceStub) {
+      return svc;
     }),
   };
   return svc;
@@ -133,13 +135,11 @@ function makeLog() {
 }
 
 interface ClientStub {
-  getDevice: ReturnType<typeof vi.fn>;
   exeDeviceBatch: ReturnType<typeof vi.fn>;
 }
 
 function makeClient(): ClientStub {
   return {
-    getDevice: vi.fn(),
     exeDeviceBatch: vi.fn(),
   };
 }
@@ -159,9 +159,8 @@ function setup() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handler = new LockAccessory(api as any, log as any, accessory as any, client as any);
   const svc = accessory.services.get(ServiceId.LockMechanism)!;
-  const current = svc.chars.get(CharId.LockCurrentState)!;
   const target = svc.chars.get(CharId.LockTargetState)!;
-  return { api, log, accessory, client, handler, svc, current, target };
+  return { api, log, accessory, client, handler, svc, target };
 }
 
 beforeEach(() => {
@@ -169,12 +168,18 @@ beforeEach(() => {
 });
 
 describe('LockAccessory', () => {
-  it('adds LockMechanism service and registers handlers for current/target states', () => {
-    const { svc, current, target } = setup();
+  it('adds LockMechanism service, wires only LockTargetState onSet (no onGet, background-poll pattern)', () => {
+    const { svc, target } = setup();
     expect(svc).toBeDefined();
-    expect(current.onGet).toHaveBeenCalledTimes(1);
-    expect(target.onGet).toHaveBeenCalledTimes(1);
+    // LockCurrentState is never wired in the constructor (no onGet); poller pushes value.
+    expect(svc.getCharacteristic).not.toHaveBeenCalledWith(CharId.LockCurrentState);
+    expect(target.onGet).not.toHaveBeenCalled();
     expect(target.onSet).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes devicecd for the poller', () => {
+    const { handler } = setup();
+    expect(handler.devicecd).toBe('GDK_TEST_001');
   });
 
   it('sets AccessoryInformation Manufacturer / Model / SerialNumber', () => {
@@ -199,22 +204,7 @@ describe('LockAccessory', () => {
     new LockAccessory(api as any, log as any, accessory as any, client as any);
 
     expect(accessory.addService).not.toHaveBeenCalledWith(ServiceId.LockMechanism);
-    expect(preexisting.getCharacteristic).toHaveBeenCalledWith(CharId.LockCurrentState);
     expect(preexisting.getCharacteristic).toHaveBeenCalledWith(CharId.LockTargetState);
-  });
-
-  it('LockCurrentState onGet returns SECURED when valve lock is "off"', async () => {
-    const { current, client } = setup();
-    client.getDevice.mockResolvedValue({ valve: [{ lock: 'off' }] });
-
-    expect(await current.getHandler!()).toBe(LockState.SECURED);
-    expect(client.getDevice).toHaveBeenCalledWith('GDK_TEST_001');
-  });
-
-  it('LockCurrentState onGet returns UNSECURED when valve lock is "on"', async () => {
-    const { current, client } = setup();
-    client.getDevice.mockResolvedValue({ valve: [{ lock: 'on' }] });
-    expect(await current.getHandler!()).toBe(LockState.UNSECURED);
   });
 
   it('LockTargetState restricts validValues to [SECURED] to disable unlock UI', () => {
@@ -222,41 +212,35 @@ describe('LockAccessory', () => {
     expect(target.setProps).toHaveBeenCalledWith({ validValues: [LockState.SECURED] });
   });
 
-  it('LockTargetState onGet always returns SECURED (unlock UI disabled)', async () => {
-    const { target, client } = setup();
-    client.getDevice.mockResolvedValue({ valve: [{ lock: 'off' }] });
-    expect(await target.getHandler!()).toBe(LockState.SECURED);
-    client.getDevice.mockResolvedValue({ valve: [{ lock: 'on' }] });
-    expect(await target.getHandler!()).toBe(LockState.SECURED);
+  it('updateState pushes Current=SECURED + Target=SECURED when valve lock is "off"', () => {
+    const { handler, svc } = setup();
+    handler.updateState({ valve: [{ lock: 'off' }] });
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.LockCurrentState, LockState.SECURED);
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.LockTargetState, LockState.SECURED);
   });
 
-  it('LockCurrentState onGet throws NOT_RESPONDING when valve array missing', async () => {
-    const { current, client, log } = setup();
-    client.getDevice.mockResolvedValue({});
-    await expect(current.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-    await expect(current.getHandler!()).rejects.toMatchObject({
-      hapStatus: HAPStatus.SERVICE_COMMUNICATION_FAILURE,
-    });
+  it('updateState pushes Current=UNSECURED but Target stays SECURED when valve lock is "on" (validValues constraint)', () => {
+    const { handler, svc } = setup();
+    handler.updateState({ valve: [{ lock: 'on' }] });
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.LockCurrentState, LockState.UNSECURED);
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.LockTargetState, LockState.SECURED);
+  });
+
+  it('updateState marks Not Responding on both characteristics when valve array missing', () => {
+    const { handler, svc, log } = setup();
+    handler.updateState({});
+    const errors = svc.updateCharacteristic.mock.calls.filter(([, v]) => v instanceof FakeHapStatusError);
+    expect(errors.map(([c]) => c)).toEqual(
+      expect.arrayContaining([CharId.LockCurrentState, CharId.LockTargetState]),
+    );
     expect(log.warn).toHaveBeenCalled();
   });
 
-  it('LockCurrentState onGet throws NOT_RESPONDING when lock field is missing', async () => {
-    const { current, client } = setup();
-    client.getDevice.mockResolvedValue({ valve: [{}] });
-    await expect(current.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-  });
-
-  it('LockCurrentState onGet throws NOT_RESPONDING when lock field is unexpected value', async () => {
-    const { current, client, log } = setup();
-    client.getDevice.mockResolvedValue({ valve: [{ lock: 'partial' }] });
-    await expect(current.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-    expect(log.warn).toHaveBeenCalled();
-  });
-
-  it('LockCurrentState onGet throws NOT_RESPONDING when API call fails', async () => {
-    const { current, client, log } = setup();
-    client.getDevice.mockRejectedValue(new Error('boom'));
-    await expect(current.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
+  it('updateState marks Not Responding when lock field is unexpected value', () => {
+    const { handler, svc, log } = setup();
+    handler.updateState({ valve: [{ lock: 'partial' }] });
+    const errors = svc.updateCharacteristic.mock.calls.filter(([, v]) => v instanceof FakeHapStatusError);
+    expect(errors).toHaveLength(2);
     expect(log.warn).toHaveBeenCalled();
   });
 

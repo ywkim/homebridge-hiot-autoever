@@ -7,22 +7,21 @@ import type {
 } from 'homebridge';
 
 import type { HiotClient } from '../api/client.js';
+import type { DeviceResponse } from '../api/types.js';
 import type { HiotAccessoryContext } from '../platform.js';
+import type { PollableHandler } from '../poller.js';
 
 const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
 
 /**
  * Maps a Hi-oT SWT (all-off / scene switch) device to a HomeKit Switch service.
  *
- * Wires the `On` characteristic to:
- *   - `client.getDevice(devicecd)` for reads
- *   - `client.exeDeviceBatch([...])` for writes
- *
- * Failures surface as `HapStatusError(SERVICE_COMMUNICATION_FAILURE)`
- * so HomeKit shows the accessory as "Not Responding" rather than
- * caching a stale state.
+ * Reads happen through the platform's background poller, which calls
+ * {@link SwitchAccessory.updateState} on each tick. Writes hit the backend
+ * immediately via `client.exeDeviceBatch`.
  */
-export class SwitchAccessory {
+export class SwitchAccessory implements PollableHandler {
+  public readonly devicecd: string;
   private readonly service: Service;
 
   constructor(
@@ -33,6 +32,7 @@ export class SwitchAccessory {
   ) {
     const { Service: HapService, Characteristic } = this.api.hap;
     const ctx = this.context();
+    this.devicecd = ctx.devicecd;
 
     const info =
       this.accessory.getService(HapService.AccessoryInformation) ??
@@ -46,10 +46,7 @@ export class SwitchAccessory {
       this.accessory.getService(HapService.Switch) ??
       this.accessory.addService(HapService.Switch);
 
-    this.service
-      .getCharacteristic(Characteristic.On)
-      .onGet(this.handleOnGet.bind(this))
-      .onSet(this.handleOnSet.bind(this));
+    this.service.getCharacteristic(Characteristic.On).onSet(this.handleOnSet.bind(this));
   }
 
   private context(): HiotAccessoryContext {
@@ -61,21 +58,16 @@ export class SwitchAccessory {
     return new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
-  private async handleOnGet(): Promise<CharacteristicValue> {
+  updateState(res: DeviceResponse): void {
+    const { Characteristic } = this.api.hap;
     const ctx = this.context();
-    let power: string | undefined;
-    try {
-      const res = await this.client.getDevice(ctx.devicecd);
-      power = res.operation?.[0]?.power;
-    } catch (err) {
-      this.log.warn(`SWT onGet failed for devicetypecd=${ctx.devicetypecd}: ${(err as Error).message}`);
-      throw this.notResponding();
-    }
+    const power = res.operation?.[0]?.power;
     if (power === undefined) {
-      this.log.warn(`SWT onGet: power field missing for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
+      this.log.warn(`SWT poll: power field missing for devicetypecd=${ctx.devicetypecd}`);
+      this.service.updateCharacteristic(Characteristic.On, this.notResponding());
+      return;
     }
-    return power === 'on';
+    this.service.updateCharacteristic(Characteristic.On, power === 'on');
   }
 
   private async handleOnSet(value: CharacteristicValue): Promise<void> {

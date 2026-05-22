@@ -7,21 +7,24 @@ import type {
 } from 'homebridge';
 
 import type { HiotClient } from '../api/client.js';
+import type { DeviceResponse } from '../api/types.js';
 import type { HiotAccessoryContext } from '../platform.js';
+import type { PollableHandler } from '../poller.js';
 
 const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
 
 /**
  * Maps a Hi-oT VNT (ventilation) device to a HomeKit Fan v2 service.
  *
- * Wires the `Active` characteristic to:
- *   - `client.getDevice(devicecd)` for reads
- *   - `client.exeDeviceBatch([...])` for writes
+ * Reads happen through the platform's background poller, which calls
+ * {@link FanAccessory.updateState} on each tick. Writes hit the backend
+ * immediately via `client.exeDeviceBatch`.
  *
  * Only on/off is wired here; fan speed (RotationSpeed) is intentionally
  * deferred to a follow-up PR.
  */
-export class FanAccessory {
+export class FanAccessory implements PollableHandler {
+  public readonly devicecd: string;
   private readonly service: Service;
 
   constructor(
@@ -32,6 +35,7 @@ export class FanAccessory {
   ) {
     const { Service: HapService, Characteristic } = this.api.hap;
     const ctx = this.context();
+    this.devicecd = ctx.devicecd;
 
     const info =
       this.accessory.getService(HapService.AccessoryInformation) ??
@@ -45,10 +49,7 @@ export class FanAccessory {
       this.accessory.getService(HapService.Fanv2) ??
       this.accessory.addService(HapService.Fanv2);
 
-    this.service
-      .getCharacteristic(Characteristic.Active)
-      .onGet(this.handleActiveGet.bind(this))
-      .onSet(this.handleActiveSet.bind(this));
+    this.service.getCharacteristic(Characteristic.Active).onSet(this.handleActiveSet.bind(this));
   }
 
   private context(): HiotAccessoryContext {
@@ -60,22 +61,19 @@ export class FanAccessory {
     return new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
-  private async handleActiveGet(): Promise<CharacteristicValue> {
+  updateState(res: DeviceResponse): void {
     const { Characteristic } = this.api.hap;
     const ctx = this.context();
-    let power: string | undefined;
-    try {
-      const res = await this.client.getDevice(ctx.devicecd);
-      power = res.operation?.[0]?.power;
-    } catch (err) {
-      this.log.warn(`VNT onGet failed for devicetypecd=${ctx.devicetypecd}: ${(err as Error).message}`);
-      throw this.notResponding();
-    }
+    const power = res.operation?.[0]?.power;
     if (power === undefined) {
-      this.log.warn(`VNT onGet: power field missing for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
+      this.log.warn(`VNT poll: power field missing for devicetypecd=${ctx.devicetypecd}`);
+      this.service.updateCharacteristic(Characteristic.Active, this.notResponding());
+      return;
     }
-    return power === 'on' ? Characteristic.Active.ACTIVE : Characteristic.Active.INACTIVE;
+    this.service.updateCharacteristic(
+      Characteristic.Active,
+      power === 'on' ? Characteristic.Active.ACTIVE : Characteristic.Active.INACTIVE,
+    );
   }
 
   private async handleActiveSet(value: CharacteristicValue): Promise<void> {
