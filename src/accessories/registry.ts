@@ -1,6 +1,7 @@
 import type { API, Logger, PlatformAccessory } from 'homebridge';
 
 import type { HiotClient } from '../api/client.js';
+import { FanAccessory } from './fan.js';
 import { HeaterCoolerAccessory } from './heaterCooler.js';
 import { LightbulbAccessory } from './lightbulb.js';
 import { OutletAccessory } from './outlet.js';
@@ -18,4 +19,5 @@ export const HANDLER_REGISTRY: Record<string, AccessoryHandlerCtor> = {
   WSK: OutletAccessory,
   SWT: SwitchAccessory,
   ACB: HeaterCoolerAccessory,
+  VNT: FanAccessory,
 };
