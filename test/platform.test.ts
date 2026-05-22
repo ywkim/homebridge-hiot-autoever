@@ -42,6 +42,14 @@ vi.mock('../src/accessories/lightbulb.js', () => ({
   }),
 }));
 
+vi.mock('../src/accessories/outlet.js', () => ({
+  OutletAccessory: vi.fn().mockImplementation((_api, _log, accessory) => {
+    const ctx = accessory.context as { devicecd: string };
+    wskCtorCalls.push({ devicecd: ctx.devicecd });
+    return {};
+  }),
+}));
+
 import { HANDLER_REGISTRY, type AccessoryHandlerCtor } from '../src/accessories/registry.js';
 import { HiotPlatform } from '../src/platform.js';
 import { TokenStore } from '../src/storage/tokenStore.js';
@@ -484,7 +492,7 @@ describe('HiotPlatform', () => {
   it('logs "none" when no handler is attached', async () => {
     loginMock.mockResolvedValue({});
     getDeviceListMock.mockResolvedValue({
-      device: [{ devicecd: 'WSK_BBB', devicetypecd: 'WSK', devicenm: 'w1' }],
+      device: [{ devicecd: 'HTR_BBB', devicetypecd: 'HTR', devicenm: 'h1' }],
     });
     const { platform, log } = makePlatform();
     await platform.handleDidFinishLaunching();
