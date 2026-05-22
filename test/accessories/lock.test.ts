@@ -35,8 +35,10 @@ class FakeHapStatusError extends Error {
 interface CharStub {
   onGet: ReturnType<typeof vi.fn>;
   onSet: ReturnType<typeof vi.fn>;
+  setProps: ReturnType<typeof vi.fn>;
   getHandler?: () => unknown;
   setHandler?: (v: unknown) => unknown;
+  props?: Record<string, unknown>;
 }
 
 interface ServiceStub {
@@ -53,6 +55,10 @@ function makeChar(): CharStub {
     }),
     onSet: vi.fn().mockImplementation(function (this: CharStub, fn: (v: unknown) => unknown) {
       c.setHandler = fn;
+      return c;
+    }),
+    setProps: vi.fn().mockImplementation(function (this: CharStub, p: Record<string, unknown>) {
+      c.props = { ...(c.props ?? {}), ...p };
       return c;
     }),
   };
@@ -197,26 +203,31 @@ describe('LockAccessory', () => {
     expect(preexisting.getCharacteristic).toHaveBeenCalledWith(CharId.LockTargetState);
   });
 
-  it('LockCurrentState onGet returns SECURED when valve lock is "on"', async () => {
+  it('LockCurrentState onGet returns SECURED when valve lock is "off"', async () => {
     const { current, client } = setup();
-    client.getDevice.mockResolvedValue({ valve: [{ lock: 'on' }] });
+    client.getDevice.mockResolvedValue({ valve: [{ lock: 'off' }] });
 
     expect(await current.getHandler!()).toBe(LockState.SECURED);
     expect(client.getDevice).toHaveBeenCalledWith('GDK_TEST_001');
   });
 
-  it('LockCurrentState onGet returns UNSECURED when valve lock is "off"', async () => {
+  it('LockCurrentState onGet returns UNSECURED when valve lock is "on"', async () => {
     const { current, client } = setup();
-    client.getDevice.mockResolvedValue({ valve: [{ lock: 'off' }] });
+    client.getDevice.mockResolvedValue({ valve: [{ lock: 'on' }] });
     expect(await current.getHandler!()).toBe(LockState.UNSECURED);
   });
 
-  it('LockTargetState onGet mirrors valve lock value', async () => {
+  it('LockTargetState restricts validValues to [SECURED] to disable unlock UI', () => {
+    const { target } = setup();
+    expect(target.setProps).toHaveBeenCalledWith({ validValues: [LockState.SECURED] });
+  });
+
+  it('LockTargetState onGet always returns SECURED (unlock UI disabled)', async () => {
     const { target, client } = setup();
-    client.getDevice.mockResolvedValueOnce({ valve: [{ lock: 'on' }] });
+    client.getDevice.mockResolvedValue({ valve: [{ lock: 'off' }] });
     expect(await target.getHandler!()).toBe(LockState.SECURED);
-    client.getDevice.mockResolvedValueOnce({ valve: [{ lock: 'off' }] });
-    expect(await target.getHandler!()).toBe(LockState.UNSECURED);
+    client.getDevice.mockResolvedValue({ valve: [{ lock: 'on' }] });
+    expect(await target.getHandler!()).toBe(LockState.SECURED);
   });
 
   it('LockCurrentState onGet throws NOT_RESPONDING when valve array missing', async () => {
@@ -249,22 +260,11 @@ describe('LockAccessory', () => {
     expect(log.warn).toHaveBeenCalled();
   });
 
-  it('LockTargetState onSet(SECURED) issues exeDeviceBatch with valve/lock/"on"', async () => {
+  it('LockTargetState onSet(SECURED) issues exeDeviceBatch with valve/lock/"off"', async () => {
     const { target, client } = setup();
     client.exeDeviceBatch.mockResolvedValue({ device: [{ all: 1, success: 1, fail: 0 }] });
 
     await target.setHandler!(LockState.SECURED);
-
-    expect(client.exeDeviceBatch).toHaveBeenCalledWith([
-      { devicecd: 'GDK_TEST_001', resource: 'valve', attribute: 'lock', value: 'on' },
-    ]);
-  });
-
-  it('LockTargetState onSet(UNSECURED) issues exeDeviceBatch with valve/lock/"off"', async () => {
-    const { target, client } = setup();
-    client.exeDeviceBatch.mockResolvedValue({ device: [{ all: 1, success: 1, fail: 0 }] });
-
-    await target.setHandler!(LockState.UNSECURED);
 
     expect(client.exeDeviceBatch).toHaveBeenCalledWith([
       { devicecd: 'GDK_TEST_001', resource: 'valve', attribute: 'lock', value: 'off' },
