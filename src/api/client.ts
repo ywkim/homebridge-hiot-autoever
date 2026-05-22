@@ -106,9 +106,26 @@ export class HiotClient {
   }
 
   async exeDeviceBatch(commands: DeviceCommand[]): Promise<DeviceBatchResponse> {
-    return this.authedJsonRequest<DeviceBatchResponse>(DEVICE_BATCH_PATH, {
+    const raw = await this.authedJsonRequest<unknown>(DEVICE_BATCH_PATH, {
       device: commands,
     });
+    // Validate the summary shape rather than trusting JSON parse alone. A 200 +
+    // valid-JSON response with `device` missing or `device[0].fail` non-numeric
+    // would otherwise be coerced to `fail=0` by downstream handlers and silently
+    // mask backend failures. Surface those as errors so handlers map them to
+    // Not Responding via their existing try/catch.
+    const device = (raw as { device?: unknown }).device;
+    if (
+      !Array.isArray(device) ||
+      device.length < 1 ||
+      typeof (device[0] as { fail?: unknown })?.fail !== 'number'
+    ) {
+      // Do not embed the response body in the error message — mirrors the
+      // parseSuccess convention so credentials/session ids in error payloads
+      // never leak via error.message. Raw body attached as cause for debugging.
+      throw new HiotApiError('exeDeviceBatch response malformed', raw);
+    }
+    return raw as DeviceBatchResponse;
   }
 
   private doLogin(forcePlaintext: boolean): Promise<LoginResponse> {
