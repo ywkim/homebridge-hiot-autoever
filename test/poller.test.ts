@@ -260,6 +260,38 @@ describe('HiotPoller', () => {
     expect(log.debug).toHaveBeenCalled();
   });
 
+  it('tick fans out in parallel (all getDevice in flight before any resolves)', async () => {
+    const client = makeClient();
+    const log = makeLog();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let inFlight = 0;
+    let peak = 0;
+    client.getDevice.mockImplementation(async () => {
+      inFlight++;
+      if (inFlight > peak) peak = inFlight;
+      await gate;
+      inFlight--;
+      return { operation: [{ power: 'on' }] };
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const poller = new HiotPoller(client as any, log, 30000);
+    poller.register('uuid-a', makeHandler('A'));
+    poller.register('uuid-b', makeHandler('B'));
+    poller.register('uuid-c', makeHandler('C'));
+    const t = poller.tick();
+    // Drain microtasks so every parallel client.getDevice() can start.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(peak).toBe(3);
+    release();
+    await t;
+  });
+
   it('does not log devicecd in warn payloads (privacy)', async () => {
     const client = makeClient();
     const log = makeLog();
