@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { FanAccessory } from '../../src/accessories/fan.js';
 import { HeaterCoolerAccessory } from '../../src/accessories/heaterCooler.js';
 import { LightbulbAccessory } from '../../src/accessories/lightbulb.js';
 import { OutletAccessory } from '../../src/accessories/outlet.js';
@@ -21,6 +22,10 @@ describe('HANDLER_REGISTRY', () => {
 
   it('maps ACB to HeaterCoolerAccessory ctor', () => {
     expect(HANDLER_REGISTRY.ACB).toBe(HeaterCoolerAccessory);
+  });
+
+  it('maps VNT to FanAccessory ctor', () => {
+    expect(HANDLER_REGISTRY.VNT).toBe(FanAccessory);
   });
 
   it('returns undefined for unknown devicetypecd', () => {
