@@ -213,6 +213,78 @@ describe('HiotClient', () => {
     expect(res.device[0].success).toBe(1);
   });
 
+  describe('exeDeviceBatch response validation', () => {
+    function setupLoginAndBatch(batchData: unknown) {
+      interceptOnce(LOGIN_PATH, {
+        statusCode: 200,
+        data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'T' }], complex: [] },
+        responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=s; Path=/' } },
+      });
+      interceptOnce('/hiot-web/device/exedevicebatchv2', {
+        statusCode: 200,
+        data: batchData as object,
+      });
+    }
+
+    async function expectMalformed(batchData: unknown, sensitiveFragments: string[]) {
+      setupLoginAndBatch(batchData);
+      const client = newClient();
+      let caught: unknown;
+      try {
+        await client.exeDeviceBatch([
+          { devicecd: 'LGT_X', resource: 'operation', attribute: 'power', value: 'off' },
+        ]);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(HiotApiError);
+      expect(caught).not.toBeInstanceOf(HiotAuthError);
+      for (const frag of sensitiveFragments) {
+        expect((caught as Error).message).not.toContain(frag);
+      }
+      // raw body still reachable via cause for debugging
+      expect((caught as { cause?: unknown }).cause).toBeDefined();
+    }
+
+    it('throws HiotApiError when device field is missing', async () => {
+      await expectMalformed({ message: ['BACKEND_ERROR_DETAIL'] }, ['BACKEND_ERROR_DETAIL']);
+    });
+
+    it('throws HiotApiError when device array is empty', async () => {
+      await expectMalformed({ message: [], device: [] }, []);
+    });
+
+    it('throws HiotApiError when device[0].fail is not a number', async () => {
+      await expectMalformed(
+        { message: [], device: [{ all: 1, success: 1 }] },
+        [],
+      );
+    });
+
+    it('throws HiotApiError when device[0].fail is a string', async () => {
+      await expectMalformed(
+        { message: [], device: [{ all: 1, success: 1, fail: '0' }] },
+        [],
+      );
+    });
+
+    it('throws HiotApiError (not TypeError) when body is literal null', async () => {
+      interceptOnce(LOGIN_PATH, {
+        statusCode: 200,
+        data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'T' }], complex: [] },
+        responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=s; Path=/' } },
+      });
+      interceptOnce('/hiot-web/device/exedevicebatchv2', { statusCode: 200, data: 'null' });
+
+      const client = newClient();
+      await expect(
+        client.exeDeviceBatch([
+          { devicecd: 'LGT_X', resource: 'operation', attribute: 'power', value: 'off' },
+        ]),
+      ).rejects.toBeInstanceOf(HiotApiError);
+    });
+  });
+
   it('401 on data call triggers plaintext re-login and retry', async () => {
     // first login (uses cached token)
     interceptOnce(LOGIN_PATH, {
