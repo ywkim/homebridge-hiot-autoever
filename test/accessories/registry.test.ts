@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { FanAccessory } from '../../src/accessories/fan.js';
 import { HeaterCoolerAccessory } from '../../src/accessories/heaterCooler.js';
 import { LightbulbAccessory } from '../../src/accessories/lightbulb.js';
+import { LockAccessory } from '../../src/accessories/lock.js';
 import { OutletAccessory } from '../../src/accessories/outlet.js';
 import { HANDLER_REGISTRY } from '../../src/accessories/registry.js';
 import { SwitchAccessory } from '../../src/accessories/switch.js';
@@ -31,6 +32,10 @@ describe('HANDLER_REGISTRY', () => {
 
   it('maps HTR to ThermostatAccessory ctor', () => {
     expect(HANDLER_REGISTRY.HTR).toBe(ThermostatAccessory);
+  });
+
+  it('maps GDK to LockAccessory ctor', () => {
+    expect(HANDLER_REGISTRY.GDK).toBe(LockAccessory);
   });
 
   it('returns undefined for unknown devicetypecd', () => {
