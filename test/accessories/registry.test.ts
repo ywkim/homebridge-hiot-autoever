@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { HeaterCoolerAccessory } from '../../src/accessories/heaterCooler.js';
 import { LightbulbAccessory } from '../../src/accessories/lightbulb.js';
 import { OutletAccessory } from '../../src/accessories/outlet.js';
 import { HANDLER_REGISTRY } from '../../src/accessories/registry.js';
@@ -16,6 +17,10 @@ describe('HANDLER_REGISTRY', () => {
 
   it('maps SWT to SwitchAccessory ctor', () => {
     expect(HANDLER_REGISTRY.SWT).toBe(SwitchAccessory);
+  });
+
+  it('maps ACB to HeaterCoolerAccessory ctor', () => {
+    expect(HANDLER_REGISTRY.ACB).toBe(HeaterCoolerAccessory);
   });
 
   it('returns undefined for unknown devicetypecd', () => {
