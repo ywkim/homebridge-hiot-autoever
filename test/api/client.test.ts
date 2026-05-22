@@ -267,6 +267,22 @@ describe('HiotClient', () => {
         [],
       );
     });
+
+    it('throws HiotApiError (not TypeError) when body is literal null', async () => {
+      interceptOnce(LOGIN_PATH, {
+        statusCode: 200,
+        data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'T' }], complex: [] },
+        responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=s; Path=/' } },
+      });
+      interceptOnce('/hiot-web/device/exedevicebatchv2', { statusCode: 200, data: 'null' });
+
+      const client = newClient();
+      await expect(
+        client.exeDeviceBatch([
+          { devicecd: 'LGT_X', resource: 'operation', attribute: 'power', value: 'off' },
+        ]),
+      ).rejects.toBeInstanceOf(HiotApiError);
+    });
   });
 
   it('401 on data call triggers plaintext re-login and retry', async () => {

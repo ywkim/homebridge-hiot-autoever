@@ -114,7 +114,7 @@ export class HiotClient {
     // would otherwise be coerced to `fail=0` by downstream handlers and silently
     // mask backend failures. Surface those as errors so handlers map them to
     // Not Responding via their existing try/catch.
-    const device = (raw as { device?: unknown }).device;
+    const device = (raw as { device?: unknown } | null)?.device;
     if (
       !Array.isArray(device) ||
       device.length < 1 ||
