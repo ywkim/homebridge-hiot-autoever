@@ -6,6 +6,7 @@ import { LightbulbAccessory } from '../../src/accessories/lightbulb.js';
 import { OutletAccessory } from '../../src/accessories/outlet.js';
 import { HANDLER_REGISTRY } from '../../src/accessories/registry.js';
 import { SwitchAccessory } from '../../src/accessories/switch.js';
+import { ThermostatAccessory } from '../../src/accessories/thermostat.js';
 
 describe('HANDLER_REGISTRY', () => {
   it('maps LGT to LightbulbAccessory ctor', () => {
@@ -26,6 +27,10 @@ describe('HANDLER_REGISTRY', () => {
 
   it('maps VNT to FanAccessory ctor', () => {
     expect(HANDLER_REGISTRY.VNT).toBe(FanAccessory);
+  });
+
+  it('maps HTR to ThermostatAccessory ctor', () => {
+    expect(HANDLER_REGISTRY.HTR).toBe(ThermostatAccessory);
   });
 
   it('returns undefined for unknown devicetypecd', () => {

@@ -16,11 +16,12 @@ interface ClientOptionsCapture {
   onTokenUpdate?: (token: string) => void;
 }
 
-const { clientCtorCalls, loginMock, getDeviceListMock, lightbulbCtorCalls, wskCtorCalls } = vi.hoisted(() => ({
+const { clientCtorCalls, loginMock, getDeviceListMock, lightbulbCtorCalls, thermostatCtorCalls, wskCtorCalls } = vi.hoisted(() => ({
   clientCtorCalls: [] as ClientOptionsCapture[],
   loginMock: vi.fn(),
   getDeviceListMock: vi.fn(),
   lightbulbCtorCalls: [] as Array<{ devicecd: string; devicetypecd: string }>,
+  thermostatCtorCalls: [] as Array<{ devicecd: string; devicetypecd: string }>,
   wskCtorCalls: [] as Array<{ devicecd: string }>,
 }));
 
@@ -46,6 +47,14 @@ vi.mock('../src/accessories/outlet.js', () => ({
   OutletAccessory: vi.fn().mockImplementation((_api, _log, accessory) => {
     const ctx = accessory.context as { devicecd: string };
     wskCtorCalls.push({ devicecd: ctx.devicecd });
+    return {};
+  }),
+}));
+
+vi.mock('../src/accessories/thermostat.js', () => ({
+  ThermostatAccessory: vi.fn().mockImplementation((_api, _log, accessory) => {
+    const ctx = accessory.context as { devicecd: string; devicetypecd: string };
+    thermostatCtorCalls.push({ devicecd: ctx.devicecd, devicetypecd: ctx.devicetypecd });
     return {};
   }),
 }));
@@ -129,6 +138,7 @@ beforeEach(async () => {
   storageDir = await mkdtemp(join(tmpdir(), 'hiot-platform-test-'));
   clientCtorCalls.length = 0;
   lightbulbCtorCalls.length = 0;
+  thermostatCtorCalls.length = 0;
   wskCtorCalls.length = 0;
   loginMock.mockReset();
   getDeviceListMock.mockReset();
@@ -492,7 +502,7 @@ describe('HiotPlatform', () => {
   it('logs "none" when no handler is attached', async () => {
     loginMock.mockResolvedValue({});
     getDeviceListMock.mockResolvedValue({
-      device: [{ devicecd: 'HTR_BBB', devicetypecd: 'HTR', devicenm: 'h1' }],
+      device: [{ devicecd: 'UNKNOWN_BBB', devicetypecd: 'UNKNOWN', devicenm: 'u1' }],
     });
     const { platform, log } = makePlatform();
     await platform.handleDidFinishLaunching();
@@ -522,9 +532,11 @@ describe('HiotPlatform', () => {
 
       expect(wskCtorCalls.map((c) => c.devicecd)).toEqual(['WSK_BBB']);
       expect(lightbulbCtorCalls.map((c) => c.devicecd)).toEqual(['LGT_AAA']);
+      expect(thermostatCtorCalls.map((c) => c.devicecd)).toEqual(['HTR_CCC']);
       const infoText = log.info.mock.calls.map(flatten).join('\n');
       expect(infoText).toMatch(/handlers attached:.*LGT=1/);
       expect(infoText).toMatch(/handlers attached:.*WSK=1/);
+      expect(infoText).toMatch(/handlers attached:.*HTR=1/);
     } finally {
       delete HANDLER_REGISTRY.WSK;
     }
