@@ -74,6 +74,10 @@ export interface OperationState {
   valuenm?: string;
 }
 
+export interface ValveState {
+  lock?: string;
+}
+
 export interface DeviceStateDetail {
   complexcd?: string;
   connected?: string;
@@ -88,6 +92,7 @@ export interface DeviceStateDetail {
 export interface DeviceResponse {
   temperature?: TemperatureState[];
   operation?: OperationState[];
+  valve?: ValveState[];
   device?: DeviceStateDetail[];
 }
 
