@@ -41,6 +41,8 @@ PR은 신규/수정 코드에 테스트 없으면 CI 차단.
 
 ## 노출 원칙
 
-**Hi-oT 앱이 노출하는 모든 기능을 HomeKit에 1:1 미러링.** plugin은 단순 미러 역할이며, 가스밸브 lock/unlock·EV호출·일괄소등 등 안전 영향이 큰 동작도 차단 가드 없이 그대로 노출한다. 안전 책임은 Hi-oT 앱과 동일하게 사용자가 진다.
+**Hi-oT 앱이 노출하는 모든 기능을 HomeKit에 1:1 미러링.** plugin은 단순 미러 역할이며, EV호출·일괄소등 등 안전 영향이 큰 동작도 차단 가드 없이 그대로 노출한다. 안전 책임은 Hi-oT 앱과 동일하게 사용자가 진다.
+
+GDK(가스밸브): Hi-oT 앱이 unlock UI 자체를 차단하므로(안전상의 이유로 모바일에서 가스밸브 open 불가, 백엔드도 `lock='on'` set 요청을 거부), HomeKit도 `LockTargetState.setProps({ validValues: [SECURED] })`로 unlock 버튼을 비활성화한다. 가스밸브를 열려면 Hi-oT 앱이 아닌 물리적 수단(주방 벽패드, 수동 레버)을 사용해야 한다. 백엔드 값 의미: `lock='off'`=잠금(SECURED), `lock='on'`=열림(UNSECURED).
 
 이 원칙은 plugin scope·정책 의사결정의 단순화를 위한 1차 기준이다. 별도 trade-off가 발생하면 PR 단위로 논의.

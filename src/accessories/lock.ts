@@ -15,14 +15,14 @@ const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
  * Maps a Hi-oT GDK (gas valve) device to a HomeKit LockMechanism service.
  *
  * Reads `valve[0].lock` from `client.getDevice` and writes back via
- * `client.exeDeviceBatch`. Per the project's mirroring principle, the
- * unlock direction is exposed without a safety guard — the Hi-oT app
- * itself exposes lock/unlock symmetrically.
+ * `client.exeDeviceBatch`. Backend value semantics (verified live):
+ * `lock='off'` = closed/locked = SECURED, `lock='on'` = open = UNSECURED.
  *
- * The exeDeviceBatch write shape (`resource: 'valve', attribute: 'lock'`)
- * is inferred from the getdevice response and has not yet been confirmed
- * against a wallpad capture. Confirm against a live set before relying
- * on it in mission-critical scenarios.
+ * Mirrors the Hi-oT mobile app, which exposes the lock direction only
+ * and blocks unlock from the app for safety. We mirror that constraint
+ * in HomeKit via `LockTargetState.setProps({ validValues: [SECURED] })`,
+ * disabling the unlock button. Opening the gas valve requires physical
+ * means (kitchen wallpad, manual lever).
  */
 export class LockAccessory {
   private readonly service: Service;
@@ -54,6 +54,7 @@ export class LockAccessory {
 
     this.service
       .getCharacteristic(Characteristic.LockTargetState)
+      .setProps({ validValues: [Characteristic.LockTargetState.SECURED] })
       .onGet(this.handleTargetStateGet.bind(this))
       .onSet(this.handleTargetStateSet.bind(this));
   }
@@ -78,10 +79,10 @@ export class LockAccessory {
       this.log.warn(`GDK onGet failed for devicetypecd=${ctx.devicetypecd}: ${(err as Error).message}`);
       throw this.notResponding();
     }
-    if (lock === 'on') {
+    if (lock === 'off') {
       return Characteristic.LockCurrentState.SECURED;
     }
-    if (lock === 'off') {
+    if (lock === 'on') {
       return Characteristic.LockCurrentState.UNSECURED;
     }
     this.log.warn(
@@ -94,22 +95,18 @@ export class LockAccessory {
     return this.readLock();
   }
 
-  private handleTargetStateGet(): Promise<CharacteristicValue> {
-    return this.readLock();
+  private async handleTargetStateGet(): Promise<CharacteristicValue> {
+    const { Characteristic } = this.api.hap;
+    return Characteristic.LockTargetState.SECURED;
   }
 
-  private async handleTargetStateSet(value: CharacteristicValue): Promise<void> {
-    const { Characteristic } = this.api.hap;
+  private async handleTargetStateSet(_value: CharacteristicValue): Promise<void> {
     const ctx = this.context();
-    const lock = Number(value) === Characteristic.LockTargetState.SECURED ? 'on' : 'off';
 
     let result;
     try {
-      // TODO: `resource: 'valve', attribute: 'lock'` is inferred from the
-      // getdevice response shape — confirm against a Hi-oT capture of the
-      // wallpad setting the gas valve.
       result = await this.client.exeDeviceBatch([
-        { devicecd: ctx.devicecd, resource: 'valve', attribute: 'lock', value: lock },
+        { devicecd: ctx.devicecd, resource: 'valve', attribute: 'lock', value: 'off' },
       ]);
     } catch (err) {
       this.log.warn(`GDK onSet failed for devicetypecd=${ctx.devicetypecd}: ${(err as Error).message}`);
