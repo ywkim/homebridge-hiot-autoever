@@ -25,12 +25,12 @@
           "type": "password"
         }
       },
-      "pollInterval": {
-        "title": "Poll Interval (seconds)",
-        "type": "integer",
-        "default": 30,
-        "minimum": 10,
-        "description": "How often to refresh device state from the Hi-oT cloud."
+      "pollingIntervalMs": {
+        "title": "Polling Interval (milliseconds)",
+        "type": "number",
+        "default": 30000,
+        "minimum": 5000,
+        "description": "How often the background poller refreshes device state from the Hi-oT cloud and pushes values into the HomeKit cache."
       },
       "debugLogging": {
         "title": "Debug Logging",

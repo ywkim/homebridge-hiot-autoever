@@ -46,7 +46,6 @@ interface CharStub {
   onGet: ReturnType<typeof vi.fn>;
   onSet: ReturnType<typeof vi.fn>;
   setProps: ReturnType<typeof vi.fn>;
-  getHandler?: () => unknown;
   setHandler?: (v: unknown) => unknown;
   props?: Record<string, unknown>;
 }
@@ -54,13 +53,13 @@ interface CharStub {
 interface ServiceStub {
   setCharacteristic: ReturnType<typeof vi.fn>;
   getCharacteristic: ReturnType<typeof vi.fn>;
+  updateCharacteristic: ReturnType<typeof vi.fn>;
   chars: Map<unknown, CharStub>;
 }
 
 function makeChar(): CharStub {
   const c: CharStub = {
-    onGet: vi.fn().mockImplementation(function (this: CharStub, fn: () => unknown) {
-      c.getHandler = fn;
+    onGet: vi.fn().mockImplementation(function (this: CharStub) {
       return c;
     }),
     onSet: vi.fn().mockImplementation(function (this: CharStub, fn: (v: unknown) => unknown) {
@@ -89,6 +88,9 @@ function makeService(): ServiceStub {
         chars.set(id, c);
       }
       return c;
+    }),
+    updateCharacteristic: vi.fn().mockImplementation(function (this: ServiceStub) {
+      return svc;
     }),
   };
   return svc;
@@ -143,13 +145,11 @@ function makeLog() {
 }
 
 interface ClientStub {
-  getDevice: ReturnType<typeof vi.fn>;
   exeDeviceBatch: ReturnType<typeof vi.fn>;
 }
 
 function makeClient(): ClientStub {
   return {
-    getDevice: vi.fn(),
     exeDeviceBatch: vi.fn(),
   };
 }
@@ -169,8 +169,6 @@ interface SetupResult {
   handler: HeaterCoolerAccessory;
   svc: ServiceStub;
   active: CharStub;
-  currentTemp: CharStub;
-  currentState: CharStub;
   targetState: CharStub;
   coolThreshold: CharStub;
 }
@@ -191,8 +189,6 @@ function setup(): SetupResult {
     handler,
     svc,
     active: svc.chars.get(CharId.Active)!,
-    currentTemp: svc.chars.get(CharId.CurrentTemperature)!,
-    currentState: svc.chars.get(CharId.CurrentHeaterCoolerState)!,
     targetState: svc.chars.get(CharId.TargetHeaterCoolerState)!,
     coolThreshold: svc.chars.get(CharId.CoolingThresholdTemperature)!,
   };
@@ -203,42 +199,42 @@ beforeEach(() => {
 });
 
 describe('HeaterCoolerAccessory', () => {
-  it('adds HeaterCooler service with the required characteristics', () => {
-    const { svc, active, currentTemp, currentState, targetState, coolThreshold } = setup();
+  it('adds HeaterCooler service', () => {
+    const { svc } = setup();
     expect(svc).toBeDefined();
-    expect(active).toBeDefined();
-    expect(currentTemp).toBeDefined();
-    expect(currentState).toBeDefined();
-    expect(targetState).toBeDefined();
-    expect(coolThreshold).toBeDefined();
   });
 
-  it('registers onGet/onSet for Active', () => {
+  it('exposes devicecd for the poller', () => {
+    const { handler } = setup();
+    expect(handler.devicecd).toBe('ACB_TEST_001');
+  });
+
+  it('registers onSet (and no onGet) for Active', () => {
     const { active } = setup();
-    expect(active.onGet).toHaveBeenCalledTimes(1);
+    expect(active.onGet).not.toHaveBeenCalled();
     expect(active.onSet).toHaveBeenCalledTimes(1);
   });
 
-  it('registers onGet for CurrentTemperature', () => {
-    const { currentTemp } = setup();
-    expect(currentTemp.onGet).toHaveBeenCalledTimes(1);
+  it('does not wire CurrentTemperature in constructor (background-poll only)', () => {
+    const { svc } = setup();
+    expect(svc.getCharacteristic).not.toHaveBeenCalledWith(CharId.CurrentTemperature);
   });
 
-  it('registers onGet for CurrentHeaterCoolerState', () => {
-    const { currentState } = setup();
-    expect(currentState.onGet).toHaveBeenCalledTimes(1);
+  it('does not wire CurrentHeaterCoolerState in constructor (background-poll only)', () => {
+    const { svc } = setup();
+    expect(svc.getCharacteristic).not.toHaveBeenCalledWith(CharId.CurrentHeaterCoolerState);
   });
 
-  it('registers onGet/onSet for TargetHeaterCoolerState and limits validValues to [COOL]', () => {
+  it('registers onSet (and no onGet) for TargetHeaterCoolerState and limits validValues to [COOL]', () => {
     const { targetState } = setup();
-    expect(targetState.onGet).toHaveBeenCalledTimes(1);
+    expect(targetState.onGet).not.toHaveBeenCalled();
     expect(targetState.onSet).toHaveBeenCalledTimes(1);
     expect(targetState.setProps).toHaveBeenCalledWith({ validValues: [TargetHCState.COOL] });
   });
 
-  it('registers onGet/onSet and props for CoolingThresholdTemperature', () => {
+  it('registers onSet (and no onGet) and props for CoolingThresholdTemperature', () => {
     const { coolThreshold } = setup();
-    expect(coolThreshold.onGet).toHaveBeenCalledTimes(1);
+    expect(coolThreshold.onGet).not.toHaveBeenCalled();
     expect(coolThreshold.onSet).toHaveBeenCalledTimes(1);
     expect(coolThreshold.setProps).toHaveBeenCalledWith({
       minValue: 18,
@@ -272,34 +268,99 @@ describe('HeaterCoolerAccessory', () => {
     expect(preexisting.getCharacteristic).toHaveBeenCalledWith(CharId.Active);
   });
 
-  // --- Active onGet ---------------------------------------------------------
+  // --- updateState ----------------------------------------------------------
 
-  it('Active onGet returns ACTIVE when power is "on"', async () => {
-    const { active, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'on' }] });
-    expect(await active.getHandler!()).toBe(ActiveValue.ACTIVE);
-    expect(client.getDevice).toHaveBeenCalledWith('ACB_TEST_001');
-  });
-
-  it('Active onGet returns INACTIVE when power is "off"', async () => {
-    const { active, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'off' }] });
-    expect(await active.getHandler!()).toBe(ActiveValue.INACTIVE);
-  });
-
-  it('Active onGet throws NOT_RESPONDING when power field is missing', async () => {
-    const { active, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{}] });
-    await expect(active.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-  });
-
-  it('Active onGet throws NOT_RESPONDING when API call fails', async () => {
-    const { active, client, log } = setup();
-    client.getDevice.mockRejectedValue(new Error('boom'));
-    await expect(active.getHandler!()).rejects.toMatchObject({
-      hapStatus: HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+  it('updateState pushes Active=ACTIVE and CurrentHeaterCoolerState=COOLING when power=on', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
+      operation: [{ power: 'on' }],
+      temperature: [{ current: '24.5', desired: '22' }],
     });
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.Active, ActiveValue.ACTIVE);
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(
+      CharId.CurrentHeaterCoolerState,
+      CurrentHCState.COOLING,
+    );
+  });
+
+  it('updateState pushes Active=INACTIVE and CurrentHeaterCoolerState=INACTIVE when power=off', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
+      operation: [{ power: 'off' }],
+      temperature: [{ current: '24.5', desired: '22' }],
+    });
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.Active, ActiveValue.INACTIVE);
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(
+      CharId.CurrentHeaterCoolerState,
+      CurrentHCState.INACTIVE,
+    );
+  });
+
+  it('updateState pushes parsed temperature.current and temperature.desired', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
+      operation: [{ power: 'on' }],
+      temperature: [{ current: '24.5', desired: '22' }],
+    });
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.CurrentTemperature, 24.5);
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(CharId.CoolingThresholdTemperature, 22);
+  });
+
+  it('updateState always pushes TargetHeaterCoolerState=COOL', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
+      operation: [{ power: 'on' }],
+      temperature: [{ current: '24.5', desired: '22' }],
+    });
+    expect(svc.updateCharacteristic).toHaveBeenCalledWith(
+      CharId.TargetHeaterCoolerState,
+      TargetHCState.COOL,
+    );
+  });
+
+  it('updateState marks Active/CurrentHeaterCoolerState Not Responding when power missing', () => {
+    const { handler, svc, log } = setup();
+    handler.updateState({ temperature: [{ current: '24.5', desired: '22' }] });
+    const errCalls = svc.updateCharacteristic.mock.calls.filter(
+      ([, v]) => v instanceof FakeHapStatusError,
+    );
+    expect(errCalls.map(([c]) => c)).toEqual(
+      expect.arrayContaining([CharId.Active, CharId.CurrentHeaterCoolerState]),
+    );
     expect(log.warn).toHaveBeenCalled();
+  });
+
+  it('updateState marks CurrentTemperature Not Responding when temperature missing', () => {
+    const { handler, svc } = setup();
+    handler.updateState({ operation: [{ power: 'on' }] });
+    const errCalls = svc.updateCharacteristic.mock.calls.filter(
+      ([, v]) => v instanceof FakeHapStatusError,
+    );
+    expect(errCalls.map(([c]) => c)).toContain(CharId.CurrentTemperature);
+  });
+
+  it('updateState marks CurrentTemperature Not Responding when current is not numeric', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
+      operation: [{ power: 'on' }],
+      temperature: [{ current: 'NaN-like' }],
+    });
+    const errCalls = svc.updateCharacteristic.mock.calls.filter(
+      ([, v]) => v instanceof FakeHapStatusError,
+    );
+    expect(errCalls.map(([c]) => c)).toContain(CharId.CurrentTemperature);
+  });
+
+  it('updateState marks CoolingThresholdTemperature Not Responding when desired missing', () => {
+    const { handler, svc } = setup();
+    handler.updateState({
+      operation: [{ power: 'on' }],
+      temperature: [{ current: '24.5' }],
+    });
+    const errCalls = svc.updateCharacteristic.mock.calls.filter(
+      ([, v]) => v instanceof FakeHapStatusError,
+    );
+    expect(errCalls.map(([c]) => c)).toContain(CharId.CoolingThresholdTemperature);
   });
 
   // --- Active onSet ---------------------------------------------------------
@@ -335,59 +396,7 @@ describe('HeaterCoolerAccessory', () => {
     await expect(active.setHandler!(ActiveValue.ACTIVE)).rejects.toBeInstanceOf(FakeHapStatusError);
   });
 
-  // --- CurrentTemperature onGet --------------------------------------------
-
-  it('CurrentTemperature onGet parses temperature[0].current', async () => {
-    const { currentTemp, client } = setup();
-    client.getDevice.mockResolvedValue({ temperature: [{ current: '24.5', desired: '22' }] });
-    expect(await currentTemp.getHandler!()).toBe(24.5);
-  });
-
-  it('CurrentTemperature onGet throws NOT_RESPONDING when temperature missing', async () => {
-    const { currentTemp, client } = setup();
-    client.getDevice.mockResolvedValue({});
-    await expect(currentTemp.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-  });
-
-  it('CurrentTemperature onGet throws NOT_RESPONDING when current is not numeric', async () => {
-    const { currentTemp, client } = setup();
-    client.getDevice.mockResolvedValue({ temperature: [{ current: 'NaN-like' }] });
-    await expect(currentTemp.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-  });
-
-  it('CurrentTemperature onGet throws NOT_RESPONDING on API failure', async () => {
-    const { currentTemp, client } = setup();
-    client.getDevice.mockRejectedValue(new Error('boom'));
-    await expect(currentTemp.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-  });
-
-  // --- CurrentHeaterCoolerState onGet --------------------------------------
-
-  it('CurrentHeaterCoolerState onGet returns COOLING when power is "on"', async () => {
-    const { currentState, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'on' }] });
-    expect(await currentState.getHandler!()).toBe(CurrentHCState.COOLING);
-  });
-
-  it('CurrentHeaterCoolerState onGet returns INACTIVE when power is "off"', async () => {
-    const { currentState, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'off' }] });
-    expect(await currentState.getHandler!()).toBe(CurrentHCState.INACTIVE);
-  });
-
-  it('CurrentHeaterCoolerState onGet throws NOT_RESPONDING when power missing', async () => {
-    const { currentState, client } = setup();
-    client.getDevice.mockResolvedValue({});
-    await expect(currentState.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-  });
-
   // --- TargetHeaterCoolerState ---------------------------------------------
-
-  it('TargetHeaterCoolerState onGet always returns COOL', async () => {
-    const { targetState, client } = setup();
-    client.getDevice.mockResolvedValue({ operation: [{ power: 'on' }] });
-    expect(await targetState.getHandler!()).toBe(TargetHCState.COOL);
-  });
 
   it('TargetHeaterCoolerState onSet(COOL) is a no-op (no batch call)', async () => {
     const { targetState, client } = setup();
@@ -396,18 +405,6 @@ describe('HeaterCoolerAccessory', () => {
   });
 
   // --- CoolingThresholdTemperature -----------------------------------------
-
-  it('CoolingThresholdTemperature onGet parses temperature[0].desired', async () => {
-    const { coolThreshold, client } = setup();
-    client.getDevice.mockResolvedValue({ temperature: [{ current: '24.5', desired: '22' }] });
-    expect(await coolThreshold.getHandler!()).toBe(22);
-  });
-
-  it('CoolingThresholdTemperature onGet throws NOT_RESPONDING when desired missing', async () => {
-    const { coolThreshold, client } = setup();
-    client.getDevice.mockResolvedValue({ temperature: [{ current: '24.5' }] });
-    await expect(coolThreshold.getHandler!()).rejects.toBeInstanceOf(FakeHapStatusError);
-  });
 
   it('CoolingThresholdTemperature onSet sends integer-string desired', async () => {
     const { coolThreshold, client } = setup();

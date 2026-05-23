@@ -7,22 +7,24 @@ import type {
 } from 'homebridge';
 
 import type { HiotClient } from '../api/client.js';
+import type { DeviceResponse } from '../api/types.js';
 import type { HiotAccessoryContext } from '../platform.js';
+import type { PollableHandler } from '../poller.js';
 
 const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
 
 /**
  * Maps a Hi-oT LGT (lighting) device to a HomeKit Lightbulb service.
  *
- * Wires the `On` characteristic to:
- *   - `client.getDevice(devicecd)` for reads
- *   - `client.exeDeviceBatch([...])` for writes
+ * Reads happen through the platform's background poller, which calls
+ * {@link LightbulbAccessory.updateState} on each tick and pushes the
+ * value into the HomeKit cache via `service.updateCharacteristic`.
+ * HomeKit reads from the cache, so this class registers no onGet.
  *
- * Failures surface as `HapStatusError(SERVICE_COMMUNICATION_FAILURE)`
- * so HomeKit shows the accessory as "Not Responding" rather than
- * caching a stale state.
+ * Writes hit the backend immediately through `client.exeDeviceBatch`.
  */
-export class LightbulbAccessory {
+export class LightbulbAccessory implements PollableHandler {
+  public readonly devicecd: string;
   private readonly service: Service;
 
   constructor(
@@ -33,6 +35,7 @@ export class LightbulbAccessory {
   ) {
     const { Service: HapService, Characteristic } = this.api.hap;
     const ctx = this.context();
+    this.devicecd = ctx.devicecd;
 
     const info =
       this.accessory.getService(HapService.AccessoryInformation) ??
@@ -46,10 +49,7 @@ export class LightbulbAccessory {
       this.accessory.getService(HapService.Lightbulb) ??
       this.accessory.addService(HapService.Lightbulb);
 
-    this.service
-      .getCharacteristic(Characteristic.On)
-      .onGet(this.handleOnGet.bind(this))
-      .onSet(this.handleOnSet.bind(this));
+    this.service.getCharacteristic(Characteristic.On).onSet(this.handleOnSet.bind(this));
   }
 
   private context(): HiotAccessoryContext {
@@ -61,24 +61,19 @@ export class LightbulbAccessory {
     return new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
-  private async handleOnGet(): Promise<CharacteristicValue> {
+  updateState(res: DeviceResponse): void {
+    const { Characteristic } = this.api.hap;
     const ctx = this.context();
-    let power: string | undefined;
-    try {
-      const res = await this.client.getDevice(ctx.devicecd);
-      power = res.operation?.[0]?.power;
-    } catch (err) {
-      this.log.warn(`LGT onGet failed for devicetypecd=${ctx.devicetypecd}: ${(err as Error).message}`);
-      throw this.notResponding();
-    }
+    const power = res.operation?.[0]?.power;
     if (power === undefined) {
       // Empirically every LGT getdevice response carries operation[0].power.
       // A missing field signals an abnormal response; surface it as
       // "Not Responding" rather than silently coercing to off.
-      this.log.warn(`LGT onGet: power field missing for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
+      this.log.warn(`LGT poll: power field missing for devicetypecd=${ctx.devicetypecd}`);
+      this.service.updateCharacteristic(Characteristic.On, this.notResponding());
+      return;
     }
-    return power === 'on';
+    this.service.updateCharacteristic(Characteristic.On, power === 'on');
   }
 
   private async handleOnSet(value: CharacteristicValue): Promise<void> {

@@ -9,6 +9,7 @@ import type {
 import type { HiotClient } from '../api/client.js';
 import type { DeviceResponse } from '../api/types.js';
 import type { HiotAccessoryContext } from '../platform.js';
+import type { PollableHandler } from '../poller.js';
 
 const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
 
@@ -19,6 +20,10 @@ const COOL_THRESHOLD_STEP = 1;
 /**
  * Maps a Hi-oT ACB (air conditioner) device to a HomeKit HeaterCooler service.
  *
+ * Reads happen through the platform's background poller, which calls
+ * {@link HeaterCoolerAccessory.updateState} on each tick. Writes hit the
+ * backend immediately via `client.exeDeviceBatch`.
+ *
  * Scope (this PR): Active, CurrentTemperature, CurrentHeaterCoolerState,
  * TargetHeaterCoolerState (locked to COOL), CoolingThresholdTemperature.
  * Fan speed / swing / HEAT|AUTO modes / 0.5°C precision are deferred.
@@ -26,7 +31,8 @@ const COOL_THRESHOLD_STEP = 1;
  * The `temperature[0].desired` write attribute is empirically inferred from
  * Hi-oT app behavior and may need adjustment after capture validation.
  */
-export class HeaterCoolerAccessory {
+export class HeaterCoolerAccessory implements PollableHandler {
+  public readonly devicecd: string;
   private readonly service: Service;
 
   constructor(
@@ -37,6 +43,7 @@ export class HeaterCoolerAccessory {
   ) {
     const { Service: HapService, Characteristic } = this.api.hap;
     const ctx = this.context();
+    this.devicecd = ctx.devicecd;
 
     const info =
       this.accessory.getService(HapService.AccessoryInformation) ??
@@ -52,21 +59,11 @@ export class HeaterCoolerAccessory {
 
     this.service
       .getCharacteristic(Characteristic.Active)
-      .onGet(this.handleActiveGet.bind(this))
       .onSet(this.handleActiveSet.bind(this));
-
-    this.service
-      .getCharacteristic(Characteristic.CurrentTemperature)
-      .onGet(this.handleCurrentTemperatureGet.bind(this));
-
-    this.service
-      .getCharacteristic(Characteristic.CurrentHeaterCoolerState)
-      .onGet(this.handleCurrentStateGet.bind(this));
 
     this.service
       .getCharacteristic(Characteristic.TargetHeaterCoolerState)
       .setProps({ validValues: [Characteristic.TargetHeaterCoolerState.COOL] })
-      .onGet(this.handleTargetStateGet.bind(this))
       .onSet(this.handleTargetStateSet.bind(this));
 
     this.service
@@ -76,7 +73,6 @@ export class HeaterCoolerAccessory {
         maxValue: COOL_THRESHOLD_MAX,
         minStep: COOL_THRESHOLD_STEP,
       })
-      .onGet(this.handleCoolingThresholdGet.bind(this))
       .onSet(this.handleCoolingThresholdSet.bind(this));
   }
 
@@ -89,31 +85,53 @@ export class HeaterCoolerAccessory {
     return new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
-  private async fetchDevice(label: string): Promise<DeviceResponse> {
+  updateState(res: DeviceResponse): void {
+    const { Characteristic } = this.api.hap;
     const ctx = this.context();
-    try {
-      return await this.client.getDevice(ctx.devicecd);
-    } catch (err) {
-      this.log.warn(`ACB ${label} failed for devicetypecd=${ctx.devicetypecd}: ${(err as Error).message}`);
-      throw this.notResponding();
-    }
-  }
 
-  private requirePower(res: DeviceResponse, label: string): string {
-    const ctx = this.context();
     const power = res.operation?.[0]?.power;
     if (power === undefined) {
-      this.log.warn(`ACB ${label}: operation[0].power missing for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
+      this.log.warn(`ACB poll: operation[0].power missing for devicetypecd=${ctx.devicetypecd}`);
+      const err = this.notResponding();
+      this.service.updateCharacteristic(Characteristic.Active, err);
+      this.service.updateCharacteristic(Characteristic.CurrentHeaterCoolerState, err);
+    } else {
+      this.service.updateCharacteristic(
+        Characteristic.Active,
+        power === 'on' ? Characteristic.Active.ACTIVE : Characteristic.Active.INACTIVE,
+      );
+      this.service.updateCharacteristic(
+        Characteristic.CurrentHeaterCoolerState,
+        power === 'on'
+          ? Characteristic.CurrentHeaterCoolerState.COOLING
+          : Characteristic.CurrentHeaterCoolerState.INACTIVE,
+      );
     }
-    return power;
-  }
 
-  private async handleActiveGet(): Promise<CharacteristicValue> {
-    const { Characteristic } = this.api.hap;
-    const res = await this.fetchDevice('Active onGet');
-    const power = this.requirePower(res, 'Active onGet');
-    return power === 'on' ? Characteristic.Active.ACTIVE : Characteristic.Active.INACTIVE;
+    // TargetHeaterCoolerState is locked to COOL by setProps; refresh the
+    // cached value so HomeKit always observes the constrained value.
+    this.service.updateCharacteristic(
+      Characteristic.TargetHeaterCoolerState,
+      Characteristic.TargetHeaterCoolerState.COOL,
+    );
+
+    const current = res.temperature?.[0]?.current;
+    const currentNum = current === undefined ? NaN : parseFloat(current);
+    if (current === undefined || !Number.isFinite(currentNum)) {
+      this.log.warn(`ACB poll: temperature[0].current missing or non-numeric for devicetypecd=${ctx.devicetypecd}`);
+      this.service.updateCharacteristic(Characteristic.CurrentTemperature, this.notResponding());
+    } else {
+      this.service.updateCharacteristic(Characteristic.CurrentTemperature, currentNum);
+    }
+
+    const desired = res.temperature?.[0]?.desired;
+    const desiredNum = desired === undefined ? NaN : parseFloat(desired);
+    if (desired === undefined || !Number.isFinite(desiredNum)) {
+      this.log.warn(`ACB poll: temperature[0].desired missing or non-numeric for devicetypecd=${ctx.devicetypecd}`);
+      this.service.updateCharacteristic(Characteristic.CoolingThresholdTemperature, this.notResponding());
+    } else {
+      this.service.updateCharacteristic(Characteristic.CoolingThresholdTemperature, desiredNum);
+    }
   }
 
   private async handleActiveSet(value: CharacteristicValue): Promise<void> {
@@ -138,55 +156,9 @@ export class HeaterCoolerAccessory {
     }
   }
 
-  private async handleCurrentTemperatureGet(): Promise<CharacteristicValue> {
-    const ctx = this.context();
-    const res = await this.fetchDevice('CurrentTemperature onGet');
-    const raw = res.temperature?.[0]?.current;
-    if (raw === undefined) {
-      this.log.warn(`ACB CurrentTemperature onGet: temperature[0].current missing for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
-    }
-    const parsed = parseFloat(raw);
-    if (!Number.isFinite(parsed)) {
-      this.log.warn(`ACB CurrentTemperature onGet: non-numeric value "${raw}" for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
-    }
-    return parsed;
-  }
-
-  private async handleCurrentStateGet(): Promise<CharacteristicValue> {
-    const { Characteristic } = this.api.hap;
-    const res = await this.fetchDevice('CurrentHeaterCoolerState onGet');
-    const power = this.requirePower(res, 'CurrentHeaterCoolerState onGet');
-    return power === 'on'
-      ? Characteristic.CurrentHeaterCoolerState.COOLING
-      : Characteristic.CurrentHeaterCoolerState.INACTIVE;
-  }
-
-  private async handleTargetStateGet(): Promise<CharacteristicValue> {
-    const { Characteristic } = this.api.hap;
-    return Characteristic.TargetHeaterCoolerState.COOL;
-  }
-
   private async handleTargetStateSet(_value: CharacteristicValue): Promise<void> {
     // validValues is locked to [COOL]; HomeKit will not request any other
     // mode. Treat as a no-op rather than issuing a redundant command.
-  }
-
-  private async handleCoolingThresholdGet(): Promise<CharacteristicValue> {
-    const ctx = this.context();
-    const res = await this.fetchDevice('CoolingThresholdTemperature onGet');
-    const raw = res.temperature?.[0]?.desired;
-    if (raw === undefined) {
-      this.log.warn(`ACB CoolingThresholdTemperature onGet: temperature[0].desired missing for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
-    }
-    const parsed = parseFloat(raw);
-    if (!Number.isFinite(parsed)) {
-      this.log.warn(`ACB CoolingThresholdTemperature onGet: non-numeric value "${raw}" for devicetypecd=${ctx.devicetypecd}`);
-      throw this.notResponding();
-    }
-    return parsed;
   }
 
   private async handleCoolingThresholdSet(value: CharacteristicValue): Promise<void> {

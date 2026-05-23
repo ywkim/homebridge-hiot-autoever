@@ -7,16 +7,21 @@ import type {
 } from 'homebridge';
 
 import type { HiotClient } from '../api/client.js';
+import type { DeviceResponse } from '../api/types.js';
 import type { HiotAccessoryContext } from '../platform.js';
+import type { PollableHandler } from '../poller.js';
 
 const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
 
 /**
  * Maps a Hi-oT GDK (gas valve) device to a HomeKit LockMechanism service.
  *
- * Reads `valve[0].lock` from `client.getDevice` and writes back via
- * `client.exeDeviceBatch`. Backend value semantics (verified live):
- * `lock='off'` = closed/locked = SECURED, `lock='on'` = open = UNSECURED.
+ * Reads happen through the platform's background poller, which calls
+ * {@link LockAccessory.updateState} on each tick. Writes hit the backend
+ * immediately via `client.exeDeviceBatch`.
+ *
+ * Backend value semantics (verified live): `lock='off'` = closed/locked
+ * = SECURED, `lock='on'` = open = UNSECURED.
  *
  * Mirrors the Hi-oT mobile app, which exposes the lock direction only
  * and blocks unlock from the app for safety. We mirror that constraint
@@ -24,7 +29,8 @@ const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
  * disabling the unlock button. Opening the gas valve requires physical
  * means (kitchen wallpad, manual lever).
  */
-export class LockAccessory {
+export class LockAccessory implements PollableHandler {
+  public readonly devicecd: string;
   private readonly service: Service;
 
   constructor(
@@ -35,6 +41,7 @@ export class LockAccessory {
   ) {
     const { Service: HapService, Characteristic } = this.api.hap;
     const ctx = this.context();
+    this.devicecd = ctx.devicecd;
 
     const info =
       this.accessory.getService(HapService.AccessoryInformation) ??
@@ -49,13 +56,8 @@ export class LockAccessory {
       this.accessory.addService(HapService.LockMechanism);
 
     this.service
-      .getCharacteristic(Characteristic.LockCurrentState)
-      .onGet(this.handleCurrentStateGet.bind(this));
-
-    this.service
       .getCharacteristic(Characteristic.LockTargetState)
       .setProps({ validValues: [Characteristic.LockTargetState.SECURED] })
-      .onGet(this.handleTargetStateGet.bind(this))
       .onSet(this.handleTargetStateSet.bind(this));
   }
 
@@ -68,36 +70,32 @@ export class LockAccessory {
     return new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
-  private async readLock(): Promise<CharacteristicValue> {
+  updateState(res: DeviceResponse): void {
     const { Characteristic } = this.api.hap;
     const ctx = this.context();
-    let lock: string | undefined;
-    try {
-      const res = await this.client.getDevice(ctx.devicecd);
-      lock = res.valve?.[0]?.lock;
-    } catch (err) {
-      this.log.warn(`GDK onGet failed for devicetypecd=${ctx.devicetypecd}: ${(err as Error).message}`);
-      throw this.notResponding();
-    }
+    const lock = res.valve?.[0]?.lock;
+    let current: CharacteristicValue;
     if (lock === 'off') {
-      return Characteristic.LockCurrentState.SECURED;
+      current = Characteristic.LockCurrentState.SECURED;
+    } else if (lock === 'on') {
+      current = Characteristic.LockCurrentState.UNSECURED;
+    } else {
+      this.log.warn(
+        `GDK poll: unexpected valve lock value ${JSON.stringify(lock)} for devicetypecd=${ctx.devicetypecd}`,
+      );
+      const err = this.notResponding();
+      this.service.updateCharacteristic(Characteristic.LockCurrentState, err);
+      this.service.updateCharacteristic(Characteristic.LockTargetState, err);
+      return;
     }
-    if (lock === 'on') {
-      return Characteristic.LockCurrentState.UNSECURED;
-    }
-    this.log.warn(
-      `GDK onGet: unexpected valve lock value ${JSON.stringify(lock)} for devicetypecd=${ctx.devicetypecd}`,
+    this.service.updateCharacteristic(Characteristic.LockCurrentState, current);
+    // LockTargetState is locked to SECURED by setProps; refresh the cached
+    // value so HomeKit always observes the constrained intent even when the
+    // physical valve is open.
+    this.service.updateCharacteristic(
+      Characteristic.LockTargetState,
+      Characteristic.LockTargetState.SECURED,
     );
-    throw this.notResponding();
-  }
-
-  private handleCurrentStateGet(): Promise<CharacteristicValue> {
-    return this.readLock();
-  }
-
-  private async handleTargetStateGet(): Promise<CharacteristicValue> {
-    const { Characteristic } = this.api.hap;
-    return Characteristic.LockTargetState.SECURED;
   }
 
   private async handleTargetStateSet(_value: CharacteristicValue): Promise<void> {

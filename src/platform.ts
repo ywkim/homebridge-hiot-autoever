@@ -9,10 +9,13 @@ import type {
 import { HANDLER_REGISTRY } from './accessories/registry.js';
 import { HiotClient, type HiotClientLogger } from './api/client.js';
 import type { Device } from './api/types.js';
+import { HiotPoller, type PollableHandler } from './poller.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { TokenStore } from './storage/tokenStore.js';
 
 const DEFAULT_BASE_URL = 'https://home.hiot.autoever.com:8443';
+const DEFAULT_POLLING_INTERVAL_MS = 30_000;
+const MIN_POLLING_INTERVAL_MS = 5_000;
 
 export interface HiotAccessoryContext {
   devicecd: string;
@@ -24,15 +27,17 @@ export interface HiotAccessoryContext {
 export class HiotPlatform implements DynamicPlatformPlugin {
   public readonly accessories: PlatformAccessory[] = [];
   private readonly accessoriesByUUID = new Map<string, PlatformAccessory>();
-  private readonly handlersByUUID = new Map<string, unknown>();
+  private readonly handlersByUUID = new Map<string, PollableHandler>();
 
   private readonly tokenStore: TokenStore;
   private readonly userid: string | undefined;
   private readonly password: string | undefined;
   private readonly baseUrl: string;
   private readonly pushRegistrationToken: string | undefined;
+  private readonly pollingIntervalMs: number;
   private readonly clientLogger: HiotClientLogger;
   private client?: HiotClient;
+  private poller?: HiotPoller;
 
   constructor(
     public readonly log: Logger,
@@ -48,6 +53,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       typeof config.pushRegistrationToken === 'string' && config.pushRegistrationToken.length > 0
         ? config.pushRegistrationToken
         : undefined;
+    this.pollingIntervalMs = this.resolvePollingIntervalMs(config.pollingIntervalMs);
 
     this.tokenStore = new TokenStore(this.api.user.storagePath());
     this.clientLogger = {
@@ -59,6 +65,19 @@ export class HiotPlatform implements DynamicPlatformPlugin {
     this.api.on('didFinishLaunching', () => {
       void this.handleDidFinishLaunching();
     });
+  }
+
+  private resolvePollingIntervalMs(raw: unknown): number {
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      return DEFAULT_POLLING_INTERVAL_MS;
+    }
+    if (raw < MIN_POLLING_INTERVAL_MS) {
+      this.log.warn(
+        `pollingIntervalMs=${raw} below minimum ${MIN_POLLING_INTERVAL_MS}; clamping to minimum`,
+      );
+      return MIN_POLLING_INTERVAL_MS;
+    }
+    return raw;
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
@@ -90,10 +109,13 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       },
     });
 
+    this.poller = new HiotPoller(this.client, this.clientLogger, this.pollingIntervalMs);
+
     try {
       await this.client.login();
       const devices = await this.client.getDeviceList();
       this.syncAccessories(devices.device ?? []);
+      this.poller.start();
     } catch (err) {
       this.log.error(`Hi-oT bootstrap failed: ${(err as Error).message}`);
     }
@@ -149,6 +171,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       for (const cached of stale) {
         this.accessoriesByUUID.delete(cached.UUID);
         this.handlersByUUID.delete(cached.UUID);
+        this.poller?.unregister(cached.UUID);
         const idx = this.accessories.indexOf(cached);
         if (idx >= 0) {
           this.accessories.splice(idx, 1);
@@ -190,5 +213,6 @@ export class HiotPlatform implements DynamicPlatformPlugin {
     }
     const handler = new Ctor(this.api, this.log, accessory, this.client);
     this.handlersByUUID.set(accessory.UUID, handler);
+    this.poller?.register(accessory.UUID, handler);
   }
 }
