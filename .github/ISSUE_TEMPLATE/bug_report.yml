@@ -1,0 +1,75 @@
+name: 버그 신고
+description: 플러그인이 의도대로 동작하지 않는 경우
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        보고 전에 확인해 주세요:
+        - 같은 ID/PW로 Hi-oT 앱은 정상 동작하나요?
+        - 최신 main 브랜치를 사용하고 있나요?
+        - 로그를 첨부할 때 `userid`, `userkeyvalu`, `JSESSIONID`, 비밀번호, 디바이스명에 포함된 동·호수 등은 마스킹해 주세요.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 무엇이 잘못되었나요?
+      description: 기대 동작 vs 실제 동작을 한두 문장으로.
+      placeholder: 예) 거실 조명을 Siri로 켜려고 했지만 HomeKit에서 "응답 없음"이 표시됩니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 재현 절차
+      placeholder: |
+        1. Homebridge 기동
+        2. iPhone Home 앱에서 "거실 조명" 켜기
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: device_type
+    attributes:
+      label: 영향받는 디바이스 타입 코드
+      description: LGT / WSK / SWT / ACB / VNT / HTR / GDK / 기타
+      placeholder: LGT
+    validations:
+      required: true
+
+  - type: input
+    id: apartment
+    attributes:
+      label: 단지 / 펌웨어 (공개 가능한 범위에서)
+      description: 단지명 또는 브랜드. 정확한 위치는 적지 마세요.
+      placeholder: 예) 힐스테이트 ○○ / 포레온
+    validations:
+      required: false
+
+  - type: input
+    id: versions
+    attributes:
+      label: Homebridge / Node / 플러그인 버전
+      placeholder: Homebridge 1.8.4, Node 20.18.1, plugin commit abc1234
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 관련 로그 (`debugLogging: true` 권장)
+      description: 마스킹 후 붙여주세요. 길면 코드블록으로.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: `config.json` 의 HiotAutoever 블록 (자격증명 제거)
+      render: json
+    validations:
+      required: false

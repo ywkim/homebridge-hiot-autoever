@@ -1,0 +1,62 @@
+name: 디바이스/단지 동작 보고
+description: "우리 단지에서 됐어요/안 됐어요" 보고. 호환 단지 표를 채우는 데 큰 도움이 됩니다.
+title: "[device] "
+labels: ["device-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        보고해 주셔서 감사합니다. 호환 단지 표를 채우는 데 사용됩니다.
+        개인정보(정확한 주소·동·호수·이름)는 적지 말아주세요.
+
+  - type: input
+    id: apartment
+    attributes:
+      label: 단지명 (브랜드 + 지역까지만, 동·호수 제외)
+      placeholder: 예) 힐스테이트 ○○ / 올림픽파크포레온
+    validations:
+      required: true
+
+  - type: dropdown
+    id: status
+    attributes:
+      label: 동작 여부
+      options:
+        - "정상 — 모든 디바이스 인식 및 제어됨"
+        - "부분 — 일부 디바이스만 됨"
+        - "안 됨 — 로그인은 되는데 디바이스가 안 떠요"
+        - "안 됨 — 로그인부터 실패"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: devices
+    attributes:
+      label: 우리 단지에 있는 디바이스 (확인된 것만 체크)
+      options:
+        - label: LGT 조명
+        - label: WSK 콘센트
+        - label: SWT 스위치
+        - label: ACB 에어컨
+        - label: VNT 환기
+        - label: HTR 난방
+        - label: GDK 가스밸브
+        - label: 엘리베이터 호출 (미지원)
+        - label: 일괄소등 (미지원)
+        - label: 인터폰/방문자 (미지원)
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 메모 / 특이사항
+      placeholder: 예) 거실 조명은 4채널 중 3채널만 보임. 환기는 풍량 조절이 됩니다.
+    validations:
+      required: false
+
+  - type: input
+    id: versions
+    attributes:
+      label: Homebridge / Node / 플러그인 버전
+      placeholder: Homebridge 1.8.4, Node 20.18.1, plugin commit abc1234
+    validations:
+      required: true
