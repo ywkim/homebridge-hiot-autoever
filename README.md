@@ -9,7 +9,9 @@
 
 힐스테이트, 올림픽파크포레온 등 Hi-oT 클라우드(`https://home.hiot.autoever.com`)에 연결된 단지에서, 월패드를 그대로 둔 채 Homebridge를 통해 HomeKit으로 미러링합니다.
 
-<!-- TODO: assets/hero.png — iOS Home 앱에서 Hi-oT 디바이스 4종 이상이 보이는 Room 화면 -->
+<p align="center">
+  <img src="./assets/hero.png" alt="iOS Home 앱에서 Hi-oT 거실 디바이스(조명 4개·에어컨·난방·환기·일괄 씬·콘센트)를 한 화면에서 제어하는 모습" width="360">
+</p>
 
 > ⚠️ **비공식 커뮤니티 플러그인** — 현대오토에버·Hi-oT·KOCOM과 무관합니다. 단지·펌웨어별 동작 차이가 있을 수 있으며, 사용에 따른 책임은 사용자 본인이 집니다.
 
