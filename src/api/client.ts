@@ -19,6 +19,7 @@ const LOGIN_PATH = '/hiot-web/login/exelogin';
 const DEVICE_LIST_PATH = '/hiot-web/device/getdevicelist';
 const DEVICE_GET_PATH = '/hiot-web/device/getdevice';
 const DEVICE_BATCH_PATH = '/hiot-web/device/exedevicebatchv2';
+const CALL_ELEVATOR_PATH = '/hiot-web/homenet/execallelevator';
 
 export interface HiotClientLogger {
   debug(message: string): void;
@@ -128,6 +129,35 @@ export class HiotClient {
     return raw as DeviceBatchResponse;
   }
 
+  /**
+   * Fire-and-forget elevator call (Hi-oT "EV호출" / 엘리베이터 호출).
+   *
+   * Unlike the device endpoints, this is an empty-body POST and the backend
+   * replies with HTTP 200 and an empty body — there is no status payload to
+   * parse and no server-side result signal. We only validate the status code
+   * and reuse the same 401 re-login flow as {@link authedJsonRequest}.
+   */
+  async callElevator(): Promise<void> {
+    await this.ensureAuthenticated();
+    let raw = await this.rawEmptyRequest(CALL_ELEVATOR_PATH);
+    if (raw.status === 401) {
+      this.logger?.warn(`401 on ${CALL_ELEVATOR_PATH}; re-authenticating with plaintext`);
+      await this.cookieJar.removeAllCookies();
+      this.userKeyValu = undefined;
+      await this.doLogin(true);
+      raw = await this.rawEmptyRequest(CALL_ELEVATOR_PATH);
+    }
+    if (raw.status === 401) {
+      throw new HiotAuthError(`unauthorized on ${CALL_ELEVATOR_PATH}`);
+    }
+    if (raw.status < 200 || raw.status >= 300) {
+      // Do not embed the response body in the error message — mirrors the
+      // parseSuccess convention so any sensitive fields never leak via
+      // error.message. Raw body attached as cause for debugging.
+      throw new HiotApiError(`HTTP ${raw.status} on ${CALL_ELEVATOR_PATH}`, raw.text || undefined);
+    }
+  }
+
   private doLogin(forcePlaintext: boolean): Promise<LoginResponse> {
     // Coalesce concurrent logins: if another caller is already authenticating,
     // wait for that result instead of issuing a duplicate request. This keeps
@@ -200,12 +230,24 @@ export class HiotClient {
   }
 
   private async rawRequest(path: string, body: unknown): Promise<RawResponse> {
+    return this.sendPost(path, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** POST with an empty body — used by fire-and-forget endpoints like callElevator. */
+  private async rawEmptyRequest(path: string): Promise<RawResponse> {
+    return this.sendPost(path, { headers: { Accept: 'application/json' }, body: '' });
+  }
+
+  private async sendPost(
+    path: string,
+    init: { headers: Record<string, string>; body: string },
+  ): Promise<RawResponse> {
     const url = `${this.baseUrl}${path}`;
     const cookieHeader = await this.cookieJar.getCookieString(url);
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    };
+    const headers: Record<string, string> = { ...init.headers };
     if (cookieHeader) {
       headers.cookie = cookieHeader;
     }
@@ -215,7 +257,7 @@ export class HiotClient {
       response = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: init.body,
         dispatcher: this.dispatcher,
       });
     } catch (err) {
