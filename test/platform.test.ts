@@ -754,6 +754,40 @@ describe('HiotPlatform', () => {
       expect(platform.accessories.some((a) => a.UUID === 'UUID:ELV')).toBe(false);
     });
 
+    it('disposes the previous handler before re-instantiating on a repeat sync (idempotent)', async () => {
+      loginMock.mockResolvedValue({});
+      getDeviceListMock.mockResolvedValue({ device: [] });
+      const { platform } = makePlatform({ elevator: true });
+
+      await platform.handleDidFinishLaunching();
+      await platform.handleDidFinishLaunching();
+
+      expect(elevatorCtorCalls).toHaveLength(2);
+      expect(elevatorDisposeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('disposes a live elevator handler when the opt-out cleanup runs', () => {
+      const { platform } = makePlatform();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const internals = platform as any;
+      internals.client = {};
+      internals.elevatorHandler = { dispose: elevatorDisposeMock };
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cached: any = {
+        displayName: '엘리베이터 호출',
+        UUID: 'UUID:ELV',
+        context: { kind: 'elevator' },
+      };
+      platform.configureAccessory(cached);
+
+      internals.syncElevator();
+
+      expect(elevatorDisposeMock).toHaveBeenCalledTimes(1);
+      expect(internals.elevatorHandler).toBeUndefined();
+    });
+
     it('disposes the elevator handler on the shutdown event', async () => {
       loginMock.mockResolvedValue({});
       getDeviceListMock.mockResolvedValue({ device: [] });

@@ -238,7 +238,7 @@ export class HiotClient {
 
   /** POST with an empty body — used by fire-and-forget endpoints like callElevator. */
   private async rawEmptyRequest(path: string): Promise<RawResponse> {
-    return this.sendPost(path, { headers: {}, body: '' });
+    return this.sendPost(path, { headers: { Accept: 'application/json' }, body: '' });
   }
 
   private async sendPost(

@@ -239,6 +239,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
         if (idx >= 0) {
           this.accessories.splice(idx, 1);
         }
+        this.elevatorHandler?.dispose();
         this.elevatorHandler = undefined;
         this.log.debug('removed elevator accessory (config.elevator disabled)');
       }
@@ -256,6 +257,9 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       this.log.debug('restored elevator accessory');
     }
     accessory.context = { kind: 'elevator' };
+    // Dispose any prior handler before replacing it so a pending auto-off timer
+    // from an earlier instance can't outlive it (keeps re-sync idempotent).
+    this.elevatorHandler?.dispose();
     this.elevatorHandler = new ElevatorAccessory(this.api, this.log, accessory, this.client);
   }
 

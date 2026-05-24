@@ -12,6 +12,7 @@ interface CapturedRequest {
   path: string;
   body: unknown;
   cookie?: string;
+  accept?: string;
 }
 
 interface ReplySpec {
@@ -20,16 +21,20 @@ interface ReplySpec {
   responseOptions?: { headers?: Record<string, string | string[]> };
 }
 
-function extractCookie(headers: MockInterceptor.MockResponseCallbackOptions['headers']): string | undefined {
+function extractHeader(
+  headers: MockInterceptor.MockResponseCallbackOptions['headers'],
+  name: string,
+): string | undefined {
   if (!headers) {
     return undefined;
   }
   if (typeof (headers as { get?: unknown }).get === 'function') {
     const h = headers as { get: (k: string) => string | null };
-    return h.get('cookie') ?? undefined;
+    return h.get(name) ?? undefined;
   }
   const rec = headers as Record<string, string>;
-  return rec.cookie ?? rec.Cookie;
+  const capitalized = name.charAt(0).toUpperCase() + name.slice(1);
+  return rec[name] ?? rec[capitalized];
 }
 
 function captureFromHandler(captured: CapturedRequest[]) {
@@ -39,7 +44,8 @@ function captureFromHandler(captured: CapturedRequest[]) {
       captured.push({
         path,
         body: rawBody ? JSON.parse(rawBody) : null,
-        cookie: extractCookie(opts.headers),
+        cookie: extractHeader(opts.headers, 'cookie'),
+        accept: extractHeader(opts.headers, 'accept'),
       });
       return replySpec;
     };
@@ -343,6 +349,8 @@ describe('HiotClient', () => {
       // empty request body (captureFromHandler stores null for empty bodies)
       expect(call?.body).toBeNull();
       expect(call?.cookie).toContain('JSESSIONID_HIOTWEB=elv-sess');
+      // mirrors the captured app request, which sends Accept: application/json
+      expect(call?.accept).toContain('application/json');
     });
 
     it('resolves on a 200 response with an empty body (no JSON parse)', async () => {
