@@ -25,6 +25,14 @@ KOCOM wallpad-based Korean apartments. Cloud login + REST polling.
 
 PR은 신규/수정 코드에 테스트 없으면 CI 차단.
 
+## Commit 규칙
+
+**Conventional Commits 필수.** main push가 semantic-release를 트리거하며, 커밋 메시지로 version bump를 분류한다. 비-Conventional 커밋은 release에서 silent skip되거나 오분류된다.
+
+- 타입: `feat` / `fix` / `refactor` / `docs` / `chore` / `test` / `ci` / `build` / `perf` / `style`
+- BREAKING CHANGE: `feat!: ...` 또는 body에 `BREAKING CHANGE:` 줄
+- PR squash 머지 시 PR title이 단일 커밋 메시지로 들어가므로 PR title도 Conventional Commits 형식 준수
+
 ## Architecture
 
 - DynamicPlatformPlugin: `src/platform.ts`

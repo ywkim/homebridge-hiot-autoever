@@ -1,5 +1,7 @@
 # homebridge-hiot-autoever
 
+[![npm version](https://img.shields.io/npm/v/homebridge-hiot-autoever.svg)](https://www.npmjs.com/package/homebridge-hiot-autoever) [![CI](https://github.com/ywkim/homebridge-hiot-autoever/actions/workflows/ci.yml/badge.svg)](https://github.com/ywkim/homebridge-hiot-autoever/actions/workflows/ci.yml)
+
 Homebridge plugin for **Hi-oT (Hyundai Autoever)** — KOCOM wallpad-based Korean
 apartments (힐스테이트 / 올림픽파크포레온 등). Connects to the Hi-oT cloud
 (`https://home.hiot.autoever.com`) via cloud login + REST polling.
