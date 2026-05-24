@@ -6,6 +6,7 @@ import type {
   PlatformConfig,
 } from 'homebridge';
 
+import { ElevatorAccessory } from './accessories/elevator.js';
 import { HANDLER_REGISTRY } from './accessories/registry.js';
 import { HiotClient, type HiotClientLogger } from './api/client.js';
 import type { Device } from './api/types.js';
@@ -16,6 +17,11 @@ import { TokenStore } from './storage/tokenStore.js';
 const DEFAULT_BASE_URL = 'https://home.hiot.autoever.com:8443';
 const DEFAULT_POLLING_INTERVAL_MS = 30_000;
 const MIN_POLLING_INTERVAL_MS = 5_000;
+
+/** Stable seed for the elevator (ELV) accessory UUID. ELV is a service, not a
+ * device, so it never appears in `getdevicelist` and has no devicecd. */
+const ELEVATOR_UUID_SEED = 'ELV';
+const ELEVATOR_DISPLAY_NAME = '엘리베이터 호출';
 
 export interface HiotAccessoryContext {
   devicecd: string;
@@ -35,9 +41,11 @@ export class HiotPlatform implements DynamicPlatformPlugin {
   private readonly baseUrl: string;
   private readonly pushRegistrationToken: string | undefined;
   private readonly pollingIntervalMs: number;
+  private readonly elevatorEnabled: boolean;
   private readonly clientLogger: HiotClientLogger;
   private client?: HiotClient;
   private poller?: HiotPoller;
+  private elevatorHandler?: ElevatorAccessory;
 
   constructor(
     public readonly log: Logger,
@@ -54,6 +62,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
         ? config.pushRegistrationToken
         : undefined;
     this.pollingIntervalMs = this.resolvePollingIntervalMs(config.pollingIntervalMs);
+    this.elevatorEnabled = config.elevator === true;
 
     this.tokenStore = new TokenStore(this.api.user.storagePath());
     this.clientLogger = {
@@ -64,6 +73,9 @@ export class HiotPlatform implements DynamicPlatformPlugin {
 
     this.api.on('didFinishLaunching', () => {
       void this.handleDidFinishLaunching();
+    });
+    this.api.on('shutdown', () => {
+      this.elevatorHandler?.dispose();
     });
   }
 
@@ -115,6 +127,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       await this.client.login();
       const devices = await this.client.getDeviceList();
       this.syncAccessories(devices.device ?? []);
+      this.syncElevator();
       this.poller.start();
     } catch (err) {
       this.log.error(`Hi-oT bootstrap failed: ${(err as Error).message}`);
@@ -123,6 +136,10 @@ export class HiotPlatform implements DynamicPlatformPlugin {
 
   private syncAccessories(devices: Device[]): void {
     const seenUUIDs = new Set<string>();
+    // The elevator (ELV) accessory has its own lifecycle in syncElevator and
+    // is not part of the device list; mark it seen so it is never treated as
+    // stale and unregistered by the device-sync sweep below.
+    seenUUIDs.add(this.elevatorUUID());
     let added = 0;
     let restored = 0;
 
@@ -197,6 +214,49 @@ export class HiotPlatform implements DynamicPlatformPlugin {
         .map(([t, c]) => `${t}=${c}`)
         .join(', ') || 'none';
     this.log.info(`Hi-oT handlers attached: ${summary}`);
+  }
+
+  private elevatorUUID(): string {
+    return this.api.hap.uuid.generate(ELEVATOR_UUID_SEED);
+  }
+
+  /**
+   * Manage the opt-in elevator (ELV) accessory outside the device loop. ELV is
+   * a Hi-oT service, not a device, so it never appears in `getdevicelist`.
+   */
+  private syncElevator(): void {
+    if (!this.client) {
+      return;
+    }
+    const uuid = this.elevatorUUID();
+    const cached = this.accessoriesByUUID.get(uuid);
+
+    if (!this.elevatorEnabled) {
+      if (cached) {
+        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [cached]);
+        this.accessoriesByUUID.delete(uuid);
+        const idx = this.accessories.indexOf(cached);
+        if (idx >= 0) {
+          this.accessories.splice(idx, 1);
+        }
+        this.elevatorHandler = undefined;
+        this.log.debug('removed elevator accessory (config.elevator disabled)');
+      }
+      return;
+    }
+
+    let accessory = cached;
+    if (!accessory) {
+      accessory = new this.api.platformAccessory(ELEVATOR_DISPLAY_NAME, uuid);
+      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      this.accessories.push(accessory);
+      this.accessoriesByUUID.set(uuid, accessory);
+      this.log.debug('registered elevator accessory');
+    } else {
+      this.log.debug('restored elevator accessory');
+    }
+    accessory.context = { kind: 'elevator' };
+    this.elevatorHandler = new ElevatorAccessory(this.api, this.log, accessory, this.client);
   }
 
   private attachHandler(accessory: PlatformAccessory): void {

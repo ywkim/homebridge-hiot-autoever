@@ -319,6 +319,106 @@ describe('HiotClient', () => {
     expect(logins[1].condition.userkeyvalu).toBeUndefined();
   });
 
+  describe('callElevator', () => {
+    function setupLogin() {
+      interceptOnce(LOGIN_PATH, {
+        statusCode: 200,
+        data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'T' }], complex: [] },
+        responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=elv-sess; Path=/' } },
+      });
+    }
+
+    it('POSTs an empty body to execallelevator with the session cookie', async () => {
+      setupLogin();
+      interceptOnce('/hiot-web/homenet/execallelevator', {
+        statusCode: 200,
+        data: '',
+      });
+
+      const client = newClient();
+      await expect(client.callElevator()).resolves.toBeUndefined();
+
+      const call = captured.find((c) => c.path === '/hiot-web/homenet/execallelevator');
+      expect(call).toBeDefined();
+      // empty request body (captureFromHandler stores null for empty bodies)
+      expect(call?.body).toBeNull();
+      expect(call?.cookie).toContain('JSESSIONID_HIOTWEB=elv-sess');
+    });
+
+    it('resolves on a 200 response with an empty body (no JSON parse)', async () => {
+      setupLogin();
+      interceptOnce('/hiot-web/homenet/execallelevator', { statusCode: 200, data: '' });
+
+      const client = newClient();
+      await expect(client.callElevator()).resolves.toBeUndefined();
+    });
+
+    it('401 triggers plaintext re-login and retries the call', async () => {
+      // initial login uses the cached token
+      interceptOnce(LOGIN_PATH, {
+        statusCode: 200,
+        data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'OLD' }], complex: [] },
+        responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=stale; Path=/' } },
+      });
+      interceptOnce('/hiot-web/homenet/execallelevator', { statusCode: 401, data: '' });
+      interceptOnce(LOGIN_PATH, {
+        statusCode: 200,
+        data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'FRESH' }], complex: [] },
+        responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=fresh; Path=/' } },
+      });
+      interceptOnce('/hiot-web/homenet/execallelevator', { statusCode: 200, data: '' });
+
+      const client = newClient({ initialUserKeyValu: 'OLD' });
+      await expect(client.callElevator()).resolves.toBeUndefined();
+      expect(client.getUserKeyValu()).toBe('FRESH');
+
+      const logins = captured
+        .filter((c) => c.path === LOGIN_PATH)
+        .map((c) => c.body as { condition: Record<string, string> });
+      expect(logins).toHaveLength(2);
+      expect(logins[1].condition.passwordvalu).toBe('testpass');
+      expect(logins[1].condition.userkeyvalu).toBeUndefined();
+    });
+
+    it('throws HiotApiError (not HiotAuthError) on a non-401 HTTP error without leaking the body', async () => {
+      setupLogin();
+      interceptOnce('/hiot-web/homenet/execallelevator', {
+        statusCode: 500,
+        data: 'SENSITIVE_ELV_BODY',
+      });
+
+      const client = newClient();
+      let caught: unknown;
+      try {
+        await client.callElevator();
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(HiotApiError);
+      expect(caught).not.toBeInstanceOf(HiotAuthError);
+      expect((caught as Error).message).not.toContain('SENSITIVE_ELV_BODY');
+      expect((caught as { cause?: unknown }).cause).toBe('SENSITIVE_ELV_BODY');
+    });
+
+    it('throws HiotAuthError when re-login still yields 401', async () => {
+      interceptOnce(LOGIN_PATH, {
+        statusCode: 200,
+        data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'OLD' }], complex: [] },
+        responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=stale; Path=/' } },
+      });
+      interceptOnce('/hiot-web/homenet/execallelevator', { statusCode: 401, data: '' });
+      interceptOnce(LOGIN_PATH, {
+        statusCode: 200,
+        data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'FRESH' }], complex: [] },
+        responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=fresh; Path=/' } },
+      });
+      interceptOnce('/hiot-web/homenet/execallelevator', { statusCode: 401, data: '' });
+
+      const client = newClient({ initialUserKeyValu: 'OLD' });
+      await expect(client.callElevator()).rejects.toBeInstanceOf(HiotAuthError);
+    });
+  });
+
   it('non-401 HTTP error propagates as HiotApiError (not HiotAuthError) and does NOT embed response body in message', async () => {
     interceptOnce(LOGIN_PATH, {
       statusCode: 200,

@@ -27,6 +27,8 @@ const {
   lightbulbCtorCalls,
   thermostatCtorCalls,
   wskCtorCalls,
+  elevatorCtorCalls,
+  elevatorDisposeMock,
   pollerCtorCalls,
   pollerStartMock,
   pollerStopMock,
@@ -39,6 +41,8 @@ const {
   lightbulbCtorCalls: [] as Array<{ devicecd: string; devicetypecd: string }>,
   thermostatCtorCalls: [] as Array<{ devicecd: string; devicetypecd: string }>,
   wskCtorCalls: [] as Array<{ devicecd: string }>,
+  elevatorCtorCalls: [] as Array<{ uuid: string }>,
+  elevatorDisposeMock: vi.fn(),
   pollerCtorCalls: [] as PollerCtorCapture[],
   pollerStartMock: vi.fn(),
   pollerStopMock: vi.fn(),
@@ -77,6 +81,13 @@ vi.mock('../src/accessories/thermostat.js', () => ({
     const ctx = accessory.context as { devicecd: string; devicetypecd: string };
     thermostatCtorCalls.push({ devicecd: ctx.devicecd, devicetypecd: ctx.devicetypecd });
     return { devicecd: ctx.devicecd, updateState: vi.fn() };
+  }),
+}));
+
+vi.mock('../src/accessories/elevator.js', () => ({
+  ElevatorAccessory: vi.fn().mockImplementation((_api, _log, accessory) => {
+    elevatorCtorCalls.push({ uuid: (accessory as { UUID: string }).UUID });
+    return { dispose: elevatorDisposeMock };
   }),
 }));
 
@@ -173,6 +184,8 @@ beforeEach(async () => {
   lightbulbCtorCalls.length = 0;
   thermostatCtorCalls.length = 0;
   wskCtorCalls.length = 0;
+  elevatorCtorCalls.length = 0;
+  elevatorDisposeMock.mockReset();
   pollerCtorCalls.length = 0;
   loginMock.mockReset();
   getDeviceListMock.mockReset();
@@ -671,5 +684,86 @@ describe('HiotPlatform', () => {
     expect(visible).not.toContain('SECRET_STORED_TOKEN');
     expect(visible).not.toContain('ANOTHER_SECRET_TOKEN');
     expect(visible).not.toContain('SECRET_PASSWORD');
+  });
+
+  describe('elevator (ELV) accessory', () => {
+    it('does not register an elevator accessory when config.elevator is unset (opt-out)', async () => {
+      loginMock.mockResolvedValue({});
+      getDeviceListMock.mockResolvedValue({ device: [] });
+      const { platform, api } = makePlatform();
+      await platform.handleDidFinishLaunching();
+
+      expect(elevatorCtorCalls).toHaveLength(0);
+      expect(api.platformAccessory).not.toHaveBeenCalledWith('엘리베이터 호출', 'UUID:ELV');
+    });
+
+    it('registers and attaches an elevator accessory when config.elevator is true', async () => {
+      loginMock.mockResolvedValue({});
+      getDeviceListMock.mockResolvedValue({ device: [] });
+      const { platform, api } = makePlatform({ elevator: true });
+      await platform.handleDidFinishLaunching();
+
+      expect(api.platformAccessory).toHaveBeenCalledWith('엘리베이터 호출', 'UUID:ELV');
+      expect(api.registerPlatformAccessories).toHaveBeenCalledTimes(1);
+      expect(elevatorCtorCalls).toEqual([{ uuid: 'UUID:ELV' }]);
+      expect(platform.accessories.some((a) => a.UUID === 'UUID:ELV')).toBe(true);
+    });
+
+    it('restores a cached elevator accessory without re-registering when opt-in', async () => {
+      loginMock.mockResolvedValue({});
+      getDeviceListMock.mockResolvedValue({ device: [] });
+      const { platform, api } = makePlatform({ elevator: true });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cached: any = {
+        displayName: '엘리베이터 호출',
+        UUID: 'UUID:ELV',
+        context: { kind: 'elevator' },
+      };
+      platform.configureAccessory(cached);
+
+      await platform.handleDidFinishLaunching();
+
+      expect(api.registerPlatformAccessories).not.toHaveBeenCalled();
+      expect(api.unregisterPlatformAccessories).not.toHaveBeenCalled();
+      expect(elevatorCtorCalls).toEqual([{ uuid: 'UUID:ELV' }]);
+    });
+
+    it('unregisters a cached elevator accessory when opt-out', async () => {
+      loginMock.mockResolvedValue({});
+      getDeviceListMock.mockResolvedValue({ device: [] });
+      const { platform, api } = makePlatform();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cached: any = {
+        displayName: '엘리베이터 호출',
+        UUID: 'UUID:ELV',
+        context: { kind: 'elevator' },
+      };
+      platform.configureAccessory(cached);
+
+      await platform.handleDidFinishLaunching();
+
+      expect(api.unregisterPlatformAccessories).toHaveBeenCalledTimes(1);
+      expect(api.unregisterPlatformAccessories).toHaveBeenCalledWith(
+        'homebridge-hiot-autoever',
+        PLATFORM_NAME,
+        [cached],
+      );
+      expect(elevatorCtorCalls).toHaveLength(0);
+      expect(platform.accessories.some((a) => a.UUID === 'UUID:ELV')).toBe(false);
+    });
+
+    it('disposes the elevator handler on the shutdown event', async () => {
+      loginMock.mockResolvedValue({});
+      getDeviceListMock.mockResolvedValue({ device: [] });
+      const { platform, api } = makePlatform({ elevator: true });
+      await platform.handleDidFinishLaunching();
+
+      const shutdown = api.on.mock.calls.find((c) => c[0] === 'shutdown');
+      expect(shutdown).toBeDefined();
+      (shutdown![1] as () => void)();
+      expect(elevatorDisposeMock).toHaveBeenCalledTimes(1);
+    });
   });
 });
