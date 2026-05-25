@@ -31,6 +31,7 @@ const MANUFACTURER = 'Hi-oT (Hyundai Autoever)';
  */
 export class LockAccessory implements PollableHandler {
   public readonly devicecd: string;
+  public readonly devicetypecd: string;
   private readonly service: Service;
 
   constructor(
@@ -42,6 +43,7 @@ export class LockAccessory implements PollableHandler {
     const { Service: HapService, Characteristic } = this.api.hap;
     const ctx = this.context();
     this.devicecd = ctx.devicecd;
+    this.devicetypecd = ctx.devicetypecd;
 
     const info =
       this.accessory.getService(HapService.AccessoryInformation) ??
