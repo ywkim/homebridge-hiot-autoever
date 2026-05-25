@@ -15,6 +15,7 @@ export interface HiotPollerLogger {
  */
 export interface PollableHandler {
   readonly devicecd: string;
+  readonly devicetypecd: string;
   updateState(res: DeviceResponse): void;
 }
 
@@ -85,8 +86,15 @@ export class HiotPoller {
             const res = await this.client.getDevice(handler.devicecd);
             handler.updateState(res);
           } catch (err) {
-            // Privacy: keep devicecd out of the message; only the failure reason.
-            this.log.warn(`poll failed for one device: ${(err as Error).message}`);
+            const msg = (err as Error).message;
+            // Privacy: warn carries only devicetypecd (low apartment/user
+            // identifiability) so diagnostics can separate per-type policy
+            // quirks from transient backend flakiness. The full devicecd is
+            // emitted at debug level only, behind the user's `homebridge -D`.
+            this.log.warn(`poll failed for devicetypecd=${handler.devicetypecd}: ${msg}`);
+            this.log.debug(
+              `poll failed devicecd=${handler.devicecd} devicetypecd=${handler.devicetypecd}: ${msg}`,
+            );
           }
         }),
       );

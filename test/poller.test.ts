@@ -25,9 +25,10 @@ interface HandlerStub extends PollableHandler {
   updateState: ReturnType<typeof vi.fn>;
 }
 
-function makeHandler(devicecd: string): HandlerStub {
+function makeHandler(devicecd: string, devicetypecd = 'LGT'): HandlerStub {
   return {
     devicecd,
+    devicetypecd,
     updateState: vi.fn(),
   };
 }
@@ -304,5 +305,37 @@ describe('HiotPoller', () => {
 
     const visible = log.warn.mock.calls.flat().map(String).join(' ');
     expect(visible).not.toContain('SECRET_DEVICECD');
+  });
+
+  it('warn log on poll failure includes devicetypecd but not devicecd', async () => {
+    const client = makeClient();
+    const log = makeLog();
+    client.getDevice.mockRejectedValue(new Error('upstream 500'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const poller = new HiotPoller(client as any, log, 30000);
+    poller.register('uuid-a', makeHandler('LGT_TEST_001', 'LGT'));
+    await poller.tick();
+
+    const warned = log.warn.mock.calls.flat().map(String).join(' ');
+    expect(warned).toContain('devicetypecd=LGT');
+    // Privacy regression guard: the full devicecd must never reach warn.
+    expect(warned).not.toContain('LGT_TEST_001');
+    expect(warned).not.toContain('devicecd=');
+  });
+
+  it('debug log on poll failure includes the full devicecd', async () => {
+    const client = makeClient();
+    const log = makeLog();
+    client.getDevice.mockRejectedValue(new Error('upstream 500'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const poller = new HiotPoller(client as any, log, 30000);
+    poller.register('uuid-a', makeHandler('LGT_TEST_001', 'LGT'));
+    await poller.tick();
+
+    const debugged = log.debug.mock.calls.flat().map(String).join(' ');
+    expect(debugged).toContain('devicecd=LGT_TEST_001');
+    expect(debugged).toContain('devicetypecd=LGT');
   });
 });
