@@ -28,7 +28,7 @@ npm run test:ci     # 단발 + coverage
 npm run lint
 npm run typecheck
 npm run build
-npm run watch       # TS + Homebridge 재기동 (npm link 후)
+npm run watch       # tsc --watch (코드 변경 시 자동 빌드 — Homebridge는 수동 재시작)
 ```
 
 Homebridge에 실제로 연결해 확인하려면:

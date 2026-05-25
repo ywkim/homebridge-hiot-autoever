@@ -151,7 +151,7 @@ npm run test:ci     # 단발 + coverage
 npm run lint
 npm run typecheck
 npm run build
-npm run watch       # TS + Homebridge 재기동 (npm link 후)
+npm run watch       # tsc --watch (코드 변경 시 자동 빌드 — Homebridge는 수동 재시작)
 ```
 
 **TDD 필수.** 신규/수정 코드에 테스트가 없으면 CI가 차단합니다. 자세한 규칙은 [CONTRIBUTING.md](./CONTRIBUTING.md) 참조.
