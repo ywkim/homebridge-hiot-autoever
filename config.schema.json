@@ -32,6 +32,12 @@
         "minimum": 5000,
         "description": "How often the background poller refreshes device state from the Hi-oT cloud and pushes values into the HomeKit cache."
       },
+      "elevator": {
+        "title": "Elevator Call",
+        "type": "boolean",
+        "default": false,
+        "description": "엘리베이터 호출 (EV호출) accessory를 노출. HomeKit Switch로 60초 자동 OFF 타이머."
+      },
       "debugLogging": {
         "title": "Debug Logging",
         "type": "boolean",

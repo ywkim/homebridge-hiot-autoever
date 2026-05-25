@@ -1,5 +1,6 @@
 # homebridge-hiot-autoever
 
+[![npm version](https://img.shields.io/npm/v/homebridge-hiot-autoever.svg)](https://www.npmjs.com/package/homebridge-hiot-autoever)
 [![CI](https://github.com/ywkim/homebridge-hiot-autoever/actions/workflows/ci.yml/badge.svg)](https://github.com/ywkim/homebridge-hiot-autoever/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520.18.1-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Homebridge](https://img.shields.io/badge/homebridge-%E2%89%A51.6.1%20%7C%7C%20%E2%89%A52.0--beta-A050D7)](https://homebridge.io/)
@@ -26,21 +27,24 @@
 
 ## 지원 디바이스
 
-[`src/accessories/registry.ts`](./src/accessories/registry.ts) 기준 — Hi-oT 앱이 노출하는 것 중 현재 미러링된 동작만 표기.
+[`src/accessories/`](./src/accessories/) 기준 — Hi-oT 앱이 노출하는 것 중 현재 미러링된 동작만 표기.
 
-| 코드  | Hi-oT 명칭 | HomeKit 서비스   | 지원 동작                                                 |
-| ----- | ---------- | ---------------- | --------------------------------------------------------- |
-| `LGT` | 조명       | Lightbulb        | 켜기/끄기 (디밍·색온도 미지원)                            |
-| `WSK` | 콘센트     | Outlet           | 켜기/끄기                                                 |
-| `SWT` | 스위치     | Switch           | 켜기/끄기                                                 |
-| `ACB` | 에어컨     | HeaterCooler     | 켜기/끄기, 현재온도 표시, 냉방 목표온도 18~30 °C (1 °C 단위) |
-| `VNT` | 환기       | Fan v2           | 켜기/끄기 (팬속도 미지원)                                 |
-| `HTR` | 난방       | Thermostat       | 난방/끄기, 현재온도 표시, 목표온도 15~30 °C (1 °C 단위)   |
-| `GDK` | 가스밸브   | LockMechanism    | 잠금 상태 **읽기 전용** — 안전상 HomeKit에서 unlock 불가  |
+| 코드  | Hi-oT 명칭     | HomeKit 서비스 | 지원 동작                                                       |
+| ----- | -------------- | -------------- | --------------------------------------------------------------- |
+| `LGT` | 조명           | Lightbulb      | 켜기/끄기 (디밍·색온도 미지원)                                  |
+| `WSK` | 콘센트         | Outlet         | 켜기/끄기                                                       |
+| `SWT` | 스위치         | Switch         | 켜기/끄기 (현관 일괄소등 스위치 포함 — 켜고/끄기 양방향 트리거) |
+| `ACB` | 에어컨         | HeaterCooler   | 켜기/끄기, 현재온도 표시, 냉방 목표온도 18~30 °C (1 °C 단위)    |
+| `VNT` | 환기           | Fan v2         | 켜기/끄기 (팬속도 미지원)                                       |
+| `HTR` | 난방           | Thermostat     | 난방/끄기, 현재온도 표시, 목표온도 15~30 °C (1 °C 단위)         |
+| `GDK` | 가스밸브       | LockMechanism  | 잠금 상태 **읽기 전용** — 안전상 HomeKit에서 unlock 불가        |
+| `ELV` | 엘리베이터 호출 | Switch         | 호출 (ON 시 엘리베이터 호출, 60초 후 자동 OFF; 앱의 "호출 중" 상태 미러) |
 
 > **가스밸브 unlock이 안 되는 이유**: Hi-oT 앱과 백엔드가 모바일에서의 가스밸브 open을 거부합니다(`lock='on'` set 요청 차단). 본 플러그인도 같은 안전 정책을 따라 HomeKit unlock 버튼을 비활성화합니다. 가스밸브를 열려면 주방 벽패드나 수동 레버를 사용하세요.
 
-엘리베이터 호출·일괄소등·디밍 등은 [ROADMAP](./ROADMAP.md)에서 추적합니다. Hi-oT 앱이 노출하는 모든 기능을 1:1 미러링하는 것이 목표이므로, **빠진 디바이스 타입이 있다면 [Issue](https://github.com/ywkim/homebridge-hiot-autoever/issues/new?template=device_report.yml)로 알려주세요.**
+> **일괄소등**: 별도 디바이스 타입이 아니라 현관 일괄소등 스위치가 `SWT`로 노출됩니다. HomeKit 씬/자동화의 트리거·액션으로 그대로 사용할 수 있습니다.
+
+디밍·팬속도 등 미구현 항목은 [ROADMAP](./ROADMAP.md)에서 추적합니다. Hi-oT 앱이 노출하는 모든 기능을 1:1 미러링하는 것이 목표이므로, **빠진 디바이스 타입이 있다면 [Issue](https://github.com/ywkim/homebridge-hiot-autoever/issues/new?template=device_report.yml)로 알려주세요.**
 
 ## Hi-oT 앱 vs HomeKit으로 옮기면
 
@@ -61,17 +65,15 @@
 
 ## 설치
 
-> 📦 npm 배포 전입니다. 현 시점에서는 GitHub에서 직접 받아 `npm link`로 연결하세요. 배포 후 본 섹션이 `npm install -g homebridge-hiot-autoever`로 교체됩니다.
+Homebridge UI(`homebridge-config-ui-x`)의 Plugins 탭에서 **homebridge-hiot-autoever**를 검색해 설치하거나, CLI로 설치합니다.
 
 ```bash
-git clone https://github.com/ywkim/homebridge-hiot-autoever.git
-cd homebridge-hiot-autoever
-npm install
-npm run build
-sudo npm link
+npm install -g homebridge-hiot-autoever
 ```
 
-그 다음 Homebridge UI(`homebridge-config-ui-x`)의 Plugins 탭에서 **HiotAutoever**를 활성화하거나, `config.json`에 직접 추가합니다.
+그 다음 Homebridge UI의 Plugin Config 화면에서 **HiotAutoever**를 설정하거나, `config.json`에 직접 추가합니다.
+
+> 개발 버전을 쓰려면 저장소를 클론해 `npm install && npm run build && sudo npm link` 후 Homebridge를 재시작하세요. 자세한 내용은 [CONTRIBUTING.md](./CONTRIBUTING.md) 참조.
 
 ## 설정
 
@@ -112,7 +114,7 @@ sudo npm link
 | 키                      | 기본값                                | 설명                                                                                                              |
 | ----------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `pollingIntervalMs`     | `30000` (30초)                        | 백그라운드 폴러가 Hi-oT 클라우드에서 상태를 읽어와 HomeKit cache에 푸시하는 주기. 최소 5000ms.                    |
-| `debugLogging`          | `false`                               | 디바이스 목록·HTTP 상세 등 verbose 로그. 토큰·비밀번호는 항상 마스킹됩니다.                                       |
+| `debugLogging`          | `false`                               | 디바이스 목록·HTTP 상세 등 verbose 로그. 자동 redact는 아직 구현 전이므로, 켤 때는 로그에 토큰·세션이 노출될 수 있음을 유의하세요(아래 보안 섹션 참고). |
 | `baseUrl`               | `https://home.hiot.autoever.com:8443` | Hi-oT 엔드포인트가 바뀐 경우에만 수정. 평상시 기본값 유지.                                                        |
 | `pushRegistrationToken` | (없음)                                | APNs/FCM 토큰. 일부 단지에서 앱 fingerprint 검증을 통과하기 위해 필요. 일반 사용자는 비워두세요.                  |
 
@@ -122,7 +124,7 @@ sudo npm link
 
 - `userid` / `password`는 **Homebridge `config.json`에만** 저장되고 다른 곳으로 전송되지 않습니다.
 - 첫 로그인 성공 시 서버가 발급한 `userkeyvalu` 토큰을 [`src/storage/tokenStore.ts`](./src/storage/tokenStore.ts)가 로컬에 캐시하여 이후엔 평문 비밀번호를 거의 쓰지 않습니다.
-- 로그에서 `userkeyvalu`, `JSESSIONID`, 평문 비밀번호는 마스킹됩니다.
+- ⚠️ **로그 redact는 아직 구현 전입니다.** `userkeyvalu`, `JSESSIONID`, 평문 비밀번호의 자동 마스킹은 로드맵 항목(`pino` redact paths)이며, 그 전까지는 특히 `debugLogging: true` 로그에 민감값이 남을 수 있습니다. 로그를 공유하기 전에 직접 마스킹하세요.
 - 자세한 보안 정책과 취약점 보고 방법은 [SECURITY.md](./SECURITY.md)를 참조하세요.
 
 ## 안전 정책 (꼭 읽어주세요)
@@ -157,7 +159,7 @@ npm run watch       # TS + Homebridge 재기동 (npm link 후)
 ## 로드맵·변경 이력
 
 - 다음 후보: [ROADMAP.md](./ROADMAP.md)
-- 릴리스 노트: [CHANGELOG.md](./CHANGELOG.md)
+- 릴리스 노트: [GitHub Releases](https://github.com/ywkim/homebridge-hiot-autoever/releases) (semantic-release 자동 생성) — 자세한 안내는 [CHANGELOG.md](./CHANGELOG.md)
 
 ## 라이선스
 
@@ -180,6 +182,13 @@ A Homebridge plugin that exposes **Hi-oT (Hyundai Autoever) KOCOM wallpad** devi
 | `VNT` | Ventilation    | Fan v2          | on/off (no fan speed)                                         |
 | `HTR` | Heating        | Thermostat      | heat/off, current temp, target 15–30 °C (1 °C step)           |
 | `GDK` | Gas valve      | LockMechanism   | read-only lock state — unlock blocked for safety              |
+| `ELV` | Elevator call  | Switch          | call (ON triggers the call, auto-OFF after 60 s)              |
+
+### Install
+
+```bash
+npm install -g homebridge-hiot-autoever
+```
 
 ### Minimal config
 

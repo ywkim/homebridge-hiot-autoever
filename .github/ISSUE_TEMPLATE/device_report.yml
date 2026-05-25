@@ -41,8 +41,8 @@ body:
         - label: VNT 환기
         - label: HTR 난방
         - label: GDK 가스밸브
-        - label: 엘리베이터 호출 (미지원)
-        - label: 일괄소등 (미지원)
+        - label: ELV 엘리베이터 호출
+        - label: 일괄소등 (SWT 스위치로 노출)
         - label: 인터폰/방문자 (미지원)
 
   - type: textarea

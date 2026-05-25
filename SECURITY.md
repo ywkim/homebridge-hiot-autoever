@@ -6,11 +6,11 @@
 
 - `userid`, `password` 는 Homebridge `config.json`에서만 읽으며, 다른 곳으로 전송되지 않습니다.
 - 첫 로그인 성공 시 서버가 발급한 `userkeyvalu` 토큰을 `src/storage/tokenStore.ts`가 로컬에 캐시합니다. 이후 로그인은 토큰 기반으로 동작하며 평문 비밀번호는 거의 사용되지 않습니다.
-- 로그에서는 다음 값이 마스킹됩니다:
+- ⚠️ **로그 자동 redact는 아직 구현 전입니다.** 다음 값들의 자동 마스킹은 진행 중인 로드맵 항목(`pino` redact paths)입니다:
   - `userkeyvalu`
   - `JSESSIONID`
   - 평문 비밀번호
-- `debugLogging: true` 로 verbose 로그를 켜도 위 값들은 동일하게 마스킹됩니다.
+- redact가 적용되기 전까지는 특히 `debugLogging: true` 로그에 위 값들이 노출될 수 있으므로, **로그를 외부에 공유하기 전 반드시 직접 마스킹하세요.**
 
 ## 권장 운영
 
