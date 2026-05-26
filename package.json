@@ -73,7 +73,7 @@
     "@types/node": "^22.10.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "@vitest/coverage-v8": "^2.1.0",
+    "@vitest/coverage-v8": "^4.1.7",
     "conventional-changelog-conventionalcommits": "^9.3.1",
     "eslint": "^10.4.0",
     "eslint-config-prettier": "^9.1.0",
