@@ -57,7 +57,7 @@
     "provenance": true
   },
   "dependencies": {
-    "pino": "^9.5.0",
+    "pino": "^10.3.1",
     "tough-cookie": "^5.0.0",
     "undici": "^7.0.0"
   },
