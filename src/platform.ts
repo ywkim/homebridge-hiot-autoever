@@ -130,7 +130,18 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       this.syncElevator();
       this.poller.start();
     } catch (err) {
-      this.log.error(`Hi-oT bootstrap failed: ${(err as Error).message}`);
+      const msg = (err as Error).message;
+      const cause = (err as Error).cause;
+      let causeText = '';
+      if (cause instanceof Error) {
+        causeText = `: ${cause.message}`;
+      } else if (typeof cause === 'string') {
+        causeText = `: ${cause}`;
+      }
+      this.log.error(`Hi-oT bootstrap failed: ${msg}`);
+      if (causeText) {
+        this.log.debug(`Hi-oT bootstrap failed: ${msg}${causeText}`);
+      }
     }
   }
 
