@@ -139,7 +139,9 @@ export class HiotPlatform implements DynamicPlatformPlugin {
         causeText = `: ${cause}`;
       }
       this.log.error(`Hi-oT bootstrap failed: ${msg}`);
-      this.log.debug(`Hi-oT bootstrap failed: ${msg}${causeText}`);
+      if (causeText) {
+        this.log.debug(`Hi-oT bootstrap failed: ${msg}${causeText}`);
+      }
     }
   }
 

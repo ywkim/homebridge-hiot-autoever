@@ -664,6 +664,26 @@ describe('HiotPlatform', () => {
     );
   });
 
+  it('logs the error cause message at debug level when bootstrap fails with an Error cause', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockRejectedValue(new Error('Connection failed', { cause: new Error('timeout') }));
+    const { platform, log } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    expect(log.error).toHaveBeenCalledWith('Hi-oT bootstrap failed: Connection failed');
+    expect(log.debug).toHaveBeenCalledWith('Hi-oT bootstrap failed: Connection failed: timeout');
+  });
+
+  it('does not log a redundant debug line when bootstrap fails without a cause', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockRejectedValue(new Error('unexpected failure'));
+    const { platform, log } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    expect(log.error).toHaveBeenCalledWith('Hi-oT bootstrap failed: unexpected failure');
+    expect(log.debug).not.toHaveBeenCalledWith(expect.stringContaining('unexpected failure'));
+  });
+
   it('unregisters stale handler from the poller when a device disappears', async () => {
     loginMock.mockResolvedValue({});
     getDeviceListMock.mockResolvedValue({ device: [] });
