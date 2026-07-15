@@ -87,13 +87,16 @@ export class HiotPoller {
             handler.updateState(res);
           } catch (err) {
             const msg = (err as Error).message;
+            const cause = (err as Error).cause;
+            const causeText = typeof cause === 'string' ? `: ${cause}` : '';
             // Privacy: warn carries only devicetypecd (low apartment/user
             // identifiability) so diagnostics can separate per-type policy
-            // quirks from transient backend flakiness. The full devicecd is
-            // emitted at debug level only, behind the user's `homebridge -D`.
+            // quirks from transient backend flakiness. The full devicecd and
+            // response body are emitted at debug level only, behind the
+            // user's `homebridge -D`.
             this.log.warn(`poll failed for devicetypecd=${handler.devicetypecd}: ${msg}`);
             this.log.debug(
-              `poll failed devicecd=${handler.devicecd} devicetypecd=${handler.devicetypecd}: ${msg}`,
+              `poll failed devicecd=${handler.devicecd} devicetypecd=${handler.devicetypecd}: ${msg}${causeText}`,
             );
           }
         }),
