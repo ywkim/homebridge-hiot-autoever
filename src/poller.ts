@@ -88,7 +88,12 @@ export class HiotPoller {
           } catch (err) {
             const msg = (err as Error).message;
             const cause = (err as Error).cause;
-            const causeText = typeof cause === 'string' ? `: ${cause}` : '';
+            let causeText = '';
+            if (cause instanceof Error) {
+              causeText = `: ${cause.message}`;
+            } else if (typeof cause === 'string') {
+              causeText = `: ${cause}`;
+            }
             // Privacy: warn carries only devicetypecd (low apartment/user
             // identifiability) so diagnostics can separate per-type policy
             // quirks from transient backend flakiness. The full devicecd and
