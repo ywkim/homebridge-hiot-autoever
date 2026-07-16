@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { fetch, type Dispatcher } from 'undici';
 import { CookieJar } from 'tough-cookie';
 
@@ -14,6 +16,7 @@ import type {
 const DEFAULT_APP_TYPE_CD = 'HIOT';
 const DEFAULT_OS_TYPE = 'ios';
 const SESSION_COOKIE_NAME = 'JSESSIONID_HIOTWEB';
+const USER_AGENT = 'homebridge-hiot-autoever';
 
 const LOGIN_PATH = '/hiot-web/login/exelogin';
 const DEVICE_LIST_PATH = '/hiot-web/device/getdevicelist';
@@ -64,6 +67,7 @@ export class HiotClient {
   private readonly logger?: HiotClientLogger;
   private readonly dispatcher?: Dispatcher;
   private readonly onTokenUpdate?: (token: string) => void;
+  private readonly clientId: string;
 
   private userKeyValu: string | undefined;
 
@@ -81,6 +85,7 @@ export class HiotClient {
     this.dispatcher = options.dispatcher;
     this.onTokenUpdate = options.onTokenUpdate;
     this.userKeyValu = options.initialUserKeyValu;
+    this.clientId = randomUUID().toUpperCase();
   }
 
   /** Currently cached server-issued token, if any. */
@@ -247,7 +252,18 @@ export class HiotClient {
   ): Promise<RawResponse> {
     const url = `${this.baseUrl}${path}`;
     const cookieHeader = await this.cookieJar.getCookieString(url);
-    const headers: Record<string, string> = { ...init.headers };
+    // The gateway rejects requests whose User-Agent is undici's default token
+    // ("undici") with a 500 "인증되지 않은 요청입니다"
+    // (platform.error.interface.00004). Any other User-Agent passes. It also
+    // requires an x-hiot-clientId that is consistent between login and
+    // subsequent calls — the login response binds the session to whatever
+    // clientId is presented, so the same value must accompany every request.
+    // Both were confirmed by live curl/undici bisection (2026-07-16).
+    const headers: Record<string, string> = {
+      'User-Agent': USER_AGENT,
+      'x-hiot-clientId': this.clientId,
+      ...init.headers,
+    };
     if (cookieHeader) {
       headers.cookie = cookieHeader;
     }
