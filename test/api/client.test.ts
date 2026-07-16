@@ -13,6 +13,8 @@ interface CapturedRequest {
   body: unknown;
   cookie?: string;
   accept?: string;
+  userAgent?: string;
+  clientId?: string;
 }
 
 interface ReplySpec {
@@ -33,8 +35,13 @@ function extractHeader(
     return h.get(name) ?? undefined;
   }
   const rec = headers as Record<string, string>;
-  const capitalized = name.charAt(0).toUpperCase() + name.slice(1);
-  return rec[name] ?? rec[capitalized];
+  const lower = name.toLowerCase();
+  for (const [k, v] of Object.entries(rec)) {
+    if (k.toLowerCase() === lower) {
+      return v;
+    }
+  }
+  return undefined;
 }
 
 function captureFromHandler(captured: CapturedRequest[]) {
@@ -46,6 +53,8 @@ function captureFromHandler(captured: CapturedRequest[]) {
         body: rawBody ? JSON.parse(rawBody) : null,
         cookie: extractHeader(opts.headers, 'cookie'),
         accept: extractHeader(opts.headers, 'accept'),
+        userAgent: extractHeader(opts.headers, 'user-agent'),
+        clientId: extractHeader(opts.headers, 'x-hiot-clientId'),
       });
       return replySpec;
     };
@@ -177,6 +186,34 @@ describe('HiotClient', () => {
     expect(res.device[0].devicecd).toBe('LGT_X');
     const dataCall = captured.find((c) => c.path === '/hiot-web/device/getdevicelist');
     expect(dataCall?.cookie).toContain('JSESSIONID_HIOTWEB=session-abc');
+  });
+
+  it('sends a non-undici User-Agent and a stable x-hiot-clientId on every request', async () => {
+    interceptOnce(LOGIN_PATH, {
+      statusCode: 200,
+      data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'TOKEN' }], complex: [] },
+      responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=session-abc; Path=/; HttpOnly' } },
+    });
+    interceptOnce('/hiot-web/device/getdevicelist', {
+      statusCode: 200,
+      data: { device: [] },
+    });
+
+    const client = newClient();
+    await client.getDeviceList();
+
+    // The gateway rejects undici's default "undici" User-Agent with a 500, so
+    // every request must carry a custom one.
+    for (const call of captured) {
+      expect(call.userAgent).toBeDefined();
+      expect(call.userAgent).not.toBe('undici');
+    }
+    // clientId must be identical on the login call and the data call so the
+    // session the login binds is the one the data call presents.
+    const loginCall = captured.find((c) => c.path === LOGIN_PATH);
+    const dataCall = captured.find((c) => c.path === '/hiot-web/device/getdevicelist');
+    expect(loginCall?.clientId).toBeTruthy();
+    expect(dataCall?.clientId).toBe(loginCall?.clientId);
   });
 
   it('getDevice sends {device:{devicecd}} body', async () => {
