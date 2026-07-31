@@ -58,7 +58,7 @@
   },
   "dependencies": {
     "pino": "^9.5.0",
-    "tough-cookie": "^5.0.0",
+    "tough-cookie": "^6.0.1",
     "undici": "^7.0.0"
   },
   "peerDependencies": {
