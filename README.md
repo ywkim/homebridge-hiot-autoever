@@ -113,7 +113,7 @@ npm install -g homebridge-hiot-autoever
 
 | 키                      | 기본값                                | 설명                                                                                                              |
 | ----------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `pollingIntervalMs`     | `30000` (30초)                        | 백그라운드 폴러가 Hi-oT 클라우드에서 상태를 읽어와 HomeKit cache에 푸시하는 주기. 최소 5000ms.                    |
+| `pollingIntervalMs`     | `60000` (60초)                        | 백그라운드 폴러가 Hi-oT 클라우드에서 상태를 읽어와 HomeKit cache에 푸시하는 주기. 최소 5000ms. 주기마다 요청은 목록 1회 + 난방·에어컨·환기 기기당 1회입니다. |
 | `debugLogging`          | `false`                               | 디바이스 목록·HTTP 상세 등 verbose 로그. 자동 redact는 아직 구현 전이므로, 켤 때는 로그에 토큰·세션이 노출될 수 있음을 유의하세요(아래 보안 섹션 참고). |
 | `baseUrl`               | `https://home.hiot.autoever.com:8443` | Hi-oT 엔드포인트가 바뀐 경우에만 수정. 평상시 기본값 유지.                                                        |
 | `pushRegistrationToken` | (없음)                                | APNs/FCM 토큰. 일부 단지에서 앱 fingerprint 검증을 통과하기 위해 필요. 일반 사용자는 비워두세요.                  |
@@ -137,7 +137,7 @@ npm install -g homebridge-hiot-autoever
 
 - **로그인 실패** — Hi-oT 앱에서 같은 ID/PW로 로그인되는지 먼저 확인. 비밀번호에 특수문자가 있으면 `config.json` 이스케이프 확인.
 - **디바이스가 안 떠요** — `debugLogging: true` 로 켜고 Homebridge 재시작 → `getDeviceList` 응답에 해당 디바이스 코드가 있는지 확인. 없으면 Hi-oT 앱에 등록 자체가 안 된 디바이스이므로 월패드 측 설정을 점검.
-- **응답이 느려요** — `pollingIntervalMs` 를 줄이면 빠르지만 클라우드 부하가 늘어납니다. 10000~15000 사이를 권장.
+- **응답이 느려요** — `pollingIntervalMs` 를 줄이면 빠르지만 클라우드 부하가 늘어납니다. 기본값(60초)보다 줄일수록 클라우드 호출이 늘어납니다.
 - **HomeKit에서 "응답 없음"** — 폴링 주기 사이에 클라우드가 잠시 실패한 경우입니다. 다음 폴링에서 자동 복구됩니다.
 
 해결 안 되면 [bug 보고 Issue](https://github.com/ywkim/homebridge-hiot-autoever/issues/new?template=bug_report.yml)를 열어주세요.

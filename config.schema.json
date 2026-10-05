@@ -28,7 +28,7 @@
       "pollingIntervalMs": {
         "title": "Polling Interval (milliseconds)",
         "type": "number",
-        "default": 30000,
+        "default": 60000,
         "minimum": 5000,
         "description": "How often the background poller refreshes device state from the Hi-oT cloud and pushes values into the HomeKit cache."
       },
