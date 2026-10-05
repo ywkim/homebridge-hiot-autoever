@@ -188,7 +188,7 @@ describe('HiotClient', () => {
     expect(dataCall?.cookie).toContain('JSESSIONID_HIOTWEB=session-abc');
   });
 
-  it('sends a non-undici User-Agent and a stable x-hiot-clientId on every request', async () => {
+  it('sends a User-Agent without "homebridge" and a stable x-hiot-clientId on every request', async () => {
     interceptOnce(LOGIN_PATH, {
       statusCode: 200,
       data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'TOKEN' }], complex: [] },
@@ -202,14 +202,13 @@ describe('HiotClient', () => {
     const client = newClient();
     await client.getDeviceList();
 
-    // The gateway rejects undici's default "undici" User-Agent with a 500, so
-    // every request must carry a custom one.
+    // The gateway answers 500 when the User-Agent contains "homebridge"
+    // (case-insensitive), so no request may carry that substring.
     for (const call of captured) {
       expect(call.userAgent).toBeDefined();
-      expect(call.userAgent).not.toBe('undici');
+      expect(call.userAgent?.toLowerCase()).not.toContain('homebridge');
     }
-    // clientId must be identical on the login call and the data call so the
-    // session the login binds is the one the data call presents.
+    // clientId stays identical on the login call and the data call.
     const loginCall = captured.find((c) => c.path === LOGIN_PATH);
     const dataCall = captured.find((c) => c.path === '/hiot-web/device/getdevicelist');
     expect(loginCall?.clientId).toBeTruthy();

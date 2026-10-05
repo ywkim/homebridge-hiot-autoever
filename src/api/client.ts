@@ -16,7 +16,7 @@ import type {
 const DEFAULT_APP_TYPE_CD = 'HIOT';
 const DEFAULT_OS_TYPE = 'ios';
 const SESSION_COOKIE_NAME = 'JSESSIONID_HIOTWEB';
-const USER_AGENT = 'homebridge-hiot-autoever';
+const USER_AGENT = 'hiot-autoever';
 
 const LOGIN_PATH = '/hiot-web/login/exelogin';
 const DEVICE_LIST_PATH = '/hiot-web/device/getdevicelist';
@@ -252,13 +252,10 @@ export class HiotClient {
   ): Promise<RawResponse> {
     const url = `${this.baseUrl}${path}`;
     const cookieHeader = await this.cookieJar.getCookieString(url);
-    // The gateway rejects requests whose User-Agent is undici's default token
-    // ("undici") with a 500 "인증되지 않은 요청입니다"
-    // (platform.error.interface.00004). Any other User-Agent passes. It also
-    // requires an x-hiot-clientId that is consistent between login and
-    // subsequent calls — the login response binds the session to whatever
-    // clientId is presented, so the same value must accompany every request.
-    // Both were confirmed by live curl/undici bisection (2026-07-16).
+    // The gateway answers data calls with a 500 "인증되지 않은 요청입니다"
+    // (platform.error.interface.00004) when the User-Agent contains
+    // "homebridge" (case-insensitive, any position), so USER_AGENT must not.
+    // One x-hiot-clientId accompanies every request, login included.
     const headers: Record<string, string> = {
       'User-Agent': USER_AGENT,
       'x-hiot-clientId': this.clientId,
