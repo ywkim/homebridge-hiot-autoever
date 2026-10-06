@@ -138,7 +138,7 @@ npm install -g homebridge-hiot-autoever
 - **로그인 실패** — Hi-oT 앱에서 같은 ID/PW로 로그인되는지 먼저 확인. 비밀번호에 특수문자가 있으면 `config.json` 이스케이프 확인.
 - **디바이스가 안 떠요** — `debugLogging: true` 로 켜고 Homebridge 재시작 → `getDeviceList` 응답에 해당 디바이스 코드가 있는지 확인. 없으면 Hi-oT 앱에 등록 자체가 안 된 디바이스이므로 월패드 측 설정을 점검.
 - **응답이 느려요** — `pollingIntervalMs` 를 줄이면 빠르지만 클라우드 부하가 늘어납니다. 기본값(60초)보다 줄일수록 클라우드 호출이 늘어납니다.
-- **HomeKit에서 "응답 없음"** — 폴링 주기 사이에 클라우드가 잠시 실패한 경우입니다. 다음 폴링에서 자동 복구됩니다.
+- **HomeKit에서 "응답 없음"** — 폴링 주기 사이에 클라우드가 잠시 실패한 경우입니다. 다음 폴링에서 자동 복구됩니다. 켜고 끄는 기기(조명·콘센트·일괄소등·가스밸브)는 목록 조회가 실패하면 마지막 값을 그대로 보여주고, 다음 폴링에서 갱신됩니다.
 
 해결 안 되면 [bug 보고 Issue](https://github.com/ywkim/homebridge-hiot-autoever/issues/new?template=bug_report.yml)를 열어주세요.
 
