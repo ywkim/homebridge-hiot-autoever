@@ -39,9 +39,11 @@ PR은 신규/수정 코드에 테스트 없으면 CI 차단.
 - HTTP 클라이언트: `src/api/client.ts` — undici fetch + tough-cookie, 401 자동 재로그인
 - Accessory 매핑: `src/accessories/*` — HomeKit Service per Hi-oT device type
 - 폴링: `src/poller.ts` — Homebridge "Background polling" 패턴. 핸들러는 onGet을
-  등록하지 않고, 폴러가 `client.getDevice(devicecd)`를 주기적으로 호출해 각
-  핸들러의 `updateState(res)`로 `Characteristic.updateValue` cache 갱신. HomeKit은
-  cache만 읽으므로 onGet "slow" 경고와 중복 호출이 사라진다.
+  등록하지 않고, 폴러가 주기적으로 상태를 읽어 각 핸들러의 `updateState(res)`로
+  `Characteristic.updateValue` cache 갱신. HomeKit은 cache만 읽으므로 onGet "slow"
+  경고와 중복 호출이 사라진다. 한 주기의 요청: LGT/WSK/SWT/GDK는 `getDeviceList` 1회의
+  `attributevalu`(GDK는 `valve.lock`)로 갱신, HTR/ACB/VNT는 온도·풍량이 상세에만 있어
+  `getDevice`를 기기별로 호출. 목록 호출이 실패하면 마지막 값을 유지한다. 기본 주기 60초.
 
 ## 자격증명 처리 원칙
 

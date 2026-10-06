@@ -5,6 +5,7 @@ import type { DeviceResponse } from '../src/api/types.js';
 
 interface ClientStub {
   getDevice: ReturnType<typeof vi.fn>;
+  getDeviceList: ReturnType<typeof vi.fn>;
 }
 
 interface LoggerStub {
@@ -14,7 +15,7 @@ interface LoggerStub {
 }
 
 function makeClient(): ClientStub {
-  return { getDevice: vi.fn() };
+  return { getDevice: vi.fn(), getDeviceList: vi.fn() };
 }
 
 function makeLog(): LoggerStub {
@@ -25,7 +26,7 @@ interface HandlerStub extends PollableHandler {
   updateState: ReturnType<typeof vi.fn>;
 }
 
-function makeHandler(devicecd: string, devicetypecd = 'LGT'): HandlerStub {
+function makeHandler(devicecd: string, devicetypecd = 'HTR'): HandlerStub {
   return {
     devicecd,
     devicetypecd,
@@ -314,13 +315,13 @@ describe('HiotPoller', () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const poller = new HiotPoller(client as any, log, 30000);
-    poller.register('uuid-a', makeHandler('LGT_TEST_001', 'LGT'));
+    poller.register('uuid-a', makeHandler('HTR_TEST_001', 'HTR'));
     await poller.tick();
 
     const warned = log.warn.mock.calls.flat().map(String).join(' ');
-    expect(warned).toContain('devicetypecd=LGT');
+    expect(warned).toContain('devicetypecd=HTR');
     // Privacy regression guard: the full devicecd must never reach warn.
-    expect(warned).not.toContain('LGT_TEST_001');
+    expect(warned).not.toContain('HTR_TEST_001');
     expect(warned).not.toContain('devicecd=');
   });
 
@@ -331,11 +332,130 @@ describe('HiotPoller', () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const poller = new HiotPoller(client as any, log, 30000);
-    poller.register('uuid-a', makeHandler('LGT_TEST_001', 'LGT'));
+    poller.register('uuid-a', makeHandler('HTR_TEST_001', 'HTR'));
     await poller.tick();
 
     const debugged = log.debug.mock.calls.flat().map(String).join(' ');
-    expect(debugged).toContain('devicecd=LGT_TEST_001');
-    expect(debugged).toContain('devicetypecd=LGT');
+    expect(debugged).toContain('devicecd=HTR_TEST_001');
+    expect(debugged).toContain('devicetypecd=HTR');
+  });
+
+  describe('list-based refresh', () => {
+    it('refreshes LGT/WSK/SWT from one getDeviceList call without getDevice', async () => {
+      const client = makeClient();
+      const log = makeLog();
+      client.getDeviceList.mockResolvedValue({
+        device: [
+          { devicecd: 'L1', attributevalu: 'on' },
+          { devicecd: 'W1', attributevalu: 'off' },
+          { devicecd: 'S1', attributevalu: 'on' },
+        ],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 30000);
+      const l = makeHandler('L1', 'LGT');
+      const w = makeHandler('W1', 'WSK');
+      const s = makeHandler('S1', 'SWT');
+      poller.register('u-l', l);
+      poller.register('u-w', w);
+      poller.register('u-s', s);
+      await poller.tick();
+
+      expect(client.getDeviceList).toHaveBeenCalledTimes(1);
+      expect(client.getDevice).not.toHaveBeenCalled();
+      expect(l.updateState).toHaveBeenCalledWith({ operation: [{ power: 'on' }] });
+      expect(w.updateState).toHaveBeenCalledWith({ operation: [{ power: 'off' }] });
+      expect(s.updateState).toHaveBeenCalledWith({ operation: [{ power: 'on' }] });
+    });
+
+    it('maps GDK attributevalu to valve.lock', async () => {
+      const client = makeClient();
+      const log = makeLog();
+      client.getDeviceList.mockResolvedValue({ device: [{ devicecd: 'G1', attributevalu: 'off' }] });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 30000);
+      const g = makeHandler('G1', 'GDK');
+      poller.register('u-g', g);
+      await poller.tick();
+
+      expect(g.updateState).toHaveBeenCalledWith({ valve: [{ lock: 'off' }] });
+    });
+
+    it('still calls getDevice for HTR/ACB/VNT and getDeviceList once for the rest', async () => {
+      const client = makeClient();
+      const log = makeLog();
+      client.getDeviceList.mockResolvedValue({ device: [{ devicecd: 'L1', attributevalu: 'on' }] });
+      client.getDevice.mockResolvedValue({ temperature: [{ current: '22' }] });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 30000);
+      poller.register('u-l', makeHandler('L1', 'LGT'));
+      poller.register('u-h', makeHandler('H1', 'HTR'));
+      poller.register('u-a', makeHandler('A1', 'ACB'));
+      poller.register('u-v', makeHandler('V1', 'VNT'));
+      await poller.tick();
+
+      expect(client.getDeviceList).toHaveBeenCalledTimes(1);
+      expect(client.getDevice).toHaveBeenCalledTimes(3);
+      expect(client.getDevice).not.toHaveBeenCalledWith('L1');
+    });
+
+    it('skips getDeviceList when only detail-type handlers are registered', async () => {
+      const client = makeClient();
+      const log = makeLog();
+      client.getDevice.mockResolvedValue({ temperature: [{ current: '22' }] });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 30000);
+      poller.register('u-h', makeHandler('H1', 'HTR'));
+      await poller.tick();
+
+      expect(client.getDeviceList).not.toHaveBeenCalled();
+    });
+
+    it('keeps last values and warns without devicecd when getDeviceList fails; detail handlers still update', async () => {
+      const client = makeClient();
+      const log = makeLog();
+      client.getDeviceList.mockRejectedValue(new Error('upstream 500'));
+      client.getDevice.mockResolvedValue({ temperature: [{ current: '22' }] });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 30000);
+      const l = makeHandler('SECRET_L1', 'LGT');
+      const h = makeHandler('H1', 'HTR');
+      poller.register('u-l', l);
+      poller.register('u-h', h);
+      await poller.tick();
+
+      expect(l.updateState).not.toHaveBeenCalled();
+      expect(h.updateState).toHaveBeenCalledTimes(1);
+      const warned = log.warn.mock.calls.flat().map(String).join(' ');
+      expect(warned).toContain('getDeviceList');
+      expect(warned).not.toContain('SECRET_L1');
+    });
+
+    it('skips a handler missing from the list or lacking attributevalu, logging at debug only', async () => {
+      const client = makeClient();
+      const log = makeLog();
+      client.getDeviceList.mockResolvedValue({
+        device: [
+          { devicecd: 'NOVAL' },
+          { devicecd: 'OK1', attributevalu: 'on' },
+        ],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 30000);
+      const gone = makeHandler('GONE', 'LGT');
+      const noval = makeHandler('NOVAL', 'LGT');
+      const ok = makeHandler('OK1', 'LGT');
+      poller.register('u-g', gone);
+      poller.register('u-n', noval);
+      poller.register('u-o', ok);
+      await poller.tick();
+
+      expect(gone.updateState).not.toHaveBeenCalled();
+      expect(noval.updateState).not.toHaveBeenCalled();
+      expect(ok.updateState).toHaveBeenCalledTimes(1);
+      const warned = log.warn.mock.calls.flat().map(String).join(' ');
+      expect(warned).not.toContain('GONE');
+      expect(warned).not.toContain('NOVAL');
+    });
   });
 });
