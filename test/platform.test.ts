@@ -14,10 +14,14 @@ interface ClientOptionsCapture {
   initialUserKeyValu?: string;
   pushRegistrationToken?: string;
   onTokenUpdate?: (token: string) => void;
+  onBatchApplied?: (
+    commands: Array<{ devicecd: string; resource: string; attribute: string; value: string }>,
+  ) => void;
 }
 
 interface PollerCtorCapture {
   intervalMs: number;
+  detailIntervalMs?: number;
 }
 
 const {
@@ -34,6 +38,7 @@ const {
   pollerStopMock,
   pollerRegisterMock,
   pollerUnregisterMock,
+  pollerRefreshSoonMock,
 } = vi.hoisted(() => ({
   clientCtorCalls: [] as ClientOptionsCapture[],
   loginMock: vi.fn(),
@@ -48,6 +53,7 @@ const {
   pollerStopMock: vi.fn(),
   pollerRegisterMock: vi.fn(),
   pollerUnregisterMock: vi.fn(),
+  pollerRefreshSoonMock: vi.fn(),
 }));
 
 vi.mock('../src/api/client.js', () => ({
@@ -92,13 +98,14 @@ vi.mock('../src/accessories/elevator.js', () => ({
 }));
 
 vi.mock('../src/poller.js', () => ({
-  HiotPoller: vi.fn().mockImplementation((_client, _log, intervalMs: number) => {
-    pollerCtorCalls.push({ intervalMs });
+  HiotPoller: vi.fn().mockImplementation((_client, _log, intervalMs: number, options?: { detailIntervalMs?: number }) => {
+    pollerCtorCalls.push({ intervalMs, detailIntervalMs: options?.detailIntervalMs });
     return {
       start: pollerStartMock,
       stop: pollerStopMock,
       register: pollerRegisterMock,
       unregister: pollerUnregisterMock,
+      refreshSoon: pollerRefreshSoonMock,
     };
   }),
 }));
@@ -187,6 +194,7 @@ beforeEach(async () => {
   elevatorCtorCalls.length = 0;
   elevatorDisposeMock.mockReset();
   pollerCtorCalls.length = 0;
+  pollerRefreshSoonMock.mockReset();
   loginMock.mockReset();
   getDeviceListMock.mockReset();
   pollerStartMock.mockReset();
@@ -593,14 +601,15 @@ describe('HiotPlatform', () => {
     }
   });
 
-  it('constructs HiotPoller with default 60_000 ms when config omits pollingIntervalMs', async () => {
+  it('constructs HiotPoller with default 900_000 ms list and 7_200_000 ms detail intervals when config omits them', async () => {
     loginMock.mockResolvedValue({});
     getDeviceListMock.mockResolvedValue({ device: [] });
     const { platform } = makePlatform();
     await platform.handleDidFinishLaunching();
 
     expect(pollerCtorCalls).toHaveLength(1);
-    expect(pollerCtorCalls[0].intervalMs).toBe(60_000);
+    expect(pollerCtorCalls[0].intervalMs).toBe(900_000);
+    expect(pollerCtorCalls[0].detailIntervalMs).toBe(7_200_000);
   });
 
   it('honors configured pollingIntervalMs', async () => {
@@ -610,6 +619,38 @@ describe('HiotPlatform', () => {
     await platform.handleDidFinishLaunching();
 
     expect(pollerCtorCalls[0].intervalMs).toBe(15_000);
+  });
+
+  it('honors configured detailPollingIntervalMs', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform } = makePlatform({ detailPollingIntervalMs: 1_800_000 });
+    await platform.handleDidFinishLaunching();
+
+    expect(pollerCtorCalls[0].detailIntervalMs).toBe(1_800_000);
+  });
+
+  it('clamps detailPollingIntervalMs below the 5000 ms minimum', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform, log } = makePlatform({ detailPollingIntervalMs: 100 });
+    await platform.handleDidFinishLaunching();
+
+    expect(pollerCtorCalls[0].detailIntervalMs).toBe(5_000);
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it('asks the poller to read state back after a successful batch write', async () => {
+    loginMock.mockResolvedValue({});
+    getDeviceListMock.mockResolvedValue({ device: [] });
+    const { platform } = makePlatform();
+    await platform.handleDidFinishLaunching();
+
+    clientCtorCalls[0].onBatchApplied?.([
+      { devicecd: 'A', resource: 'operation', attribute: 'power', value: 'on' },
+      { devicecd: 'B', resource: 'operation', attribute: 'power', value: 'on' },
+    ]);
+    expect(pollerRefreshSoonMock).toHaveBeenCalledWith(['A', 'B']);
   });
 
   it('clamps pollingIntervalMs below the 5000 ms minimum', async () => {

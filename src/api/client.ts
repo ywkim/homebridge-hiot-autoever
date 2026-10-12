@@ -49,6 +49,8 @@ export interface HiotClientOptions {
    * skips the plaintext-password login path.
    */
   onTokenUpdate?: (token: string) => void;
+  /** Called after an `exeDeviceBatch` that reported no failures. */
+  onBatchApplied?: (commands: DeviceCommand[]) => void;
 }
 
 interface RawResponse {
@@ -67,6 +69,7 @@ export class HiotClient {
   private readonly logger?: HiotClientLogger;
   private readonly dispatcher?: Dispatcher;
   private readonly onTokenUpdate?: (token: string) => void;
+  private readonly onBatchApplied?: (commands: DeviceCommand[]) => void;
   private readonly clientId: string;
 
   private userKeyValu: string | undefined;
@@ -84,6 +87,7 @@ export class HiotClient {
     this.logger = options.logger;
     this.dispatcher = options.dispatcher;
     this.onTokenUpdate = options.onTokenUpdate;
+    this.onBatchApplied = options.onBatchApplied;
     this.userKeyValu = options.initialUserKeyValu;
     this.clientId = randomUUID().toUpperCase();
   }
@@ -131,7 +135,11 @@ export class HiotClient {
       // never leak via error.message. Raw body attached as cause for debugging.
       throw new HiotApiError('exeDeviceBatch response malformed', raw);
     }
-    return raw as DeviceBatchResponse;
+    const result = raw as DeviceBatchResponse;
+    if (result.device[0].fail === 0) {
+      this.onBatchApplied?.(commands);
+    }
+    return result;
   }
 
   /**

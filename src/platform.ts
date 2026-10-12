@@ -15,7 +15,8 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { TokenStore } from './storage/tokenStore.js';
 
 const DEFAULT_BASE_URL = 'https://home.hiot.autoever.com:8443';
-const DEFAULT_POLLING_INTERVAL_MS = 60_000;
+const DEFAULT_POLLING_INTERVAL_MS = 900_000;
+const DEFAULT_DETAIL_POLLING_INTERVAL_MS = 7_200_000;
 const MIN_POLLING_INTERVAL_MS = 5_000;
 
 /** Stable seed for the elevator (ELV) accessory UUID. ELV is a service, not a
@@ -41,6 +42,7 @@ export class HiotPlatform implements DynamicPlatformPlugin {
   private readonly baseUrl: string;
   private readonly pushRegistrationToken: string | undefined;
   private readonly pollingIntervalMs: number;
+  private readonly detailPollingIntervalMs: number;
   private readonly elevatorEnabled: boolean;
   private readonly clientLogger: HiotClientLogger;
   private client?: HiotClient;
@@ -61,7 +63,16 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       typeof config.pushRegistrationToken === 'string' && config.pushRegistrationToken.length > 0
         ? config.pushRegistrationToken
         : undefined;
-    this.pollingIntervalMs = this.resolvePollingIntervalMs(config.pollingIntervalMs);
+    this.pollingIntervalMs = this.resolvePollingIntervalMs(
+      'pollingIntervalMs',
+      config.pollingIntervalMs,
+      DEFAULT_POLLING_INTERVAL_MS,
+    );
+    this.detailPollingIntervalMs = this.resolvePollingIntervalMs(
+      'detailPollingIntervalMs',
+      config.detailPollingIntervalMs,
+      DEFAULT_DETAIL_POLLING_INTERVAL_MS,
+    );
     this.elevatorEnabled = config.elevator === true;
 
     this.tokenStore = new TokenStore(this.api.user.storagePath());
@@ -79,14 +90,12 @@ export class HiotPlatform implements DynamicPlatformPlugin {
     });
   }
 
-  private resolvePollingIntervalMs(raw: unknown): number {
+  private resolvePollingIntervalMs(name: string, raw: unknown, fallback: number): number {
     if (typeof raw !== 'number' || !Number.isFinite(raw)) {
-      return DEFAULT_POLLING_INTERVAL_MS;
+      return fallback;
     }
     if (raw < MIN_POLLING_INTERVAL_MS) {
-      this.log.warn(
-        `pollingIntervalMs=${raw} below minimum ${MIN_POLLING_INTERVAL_MS}; clamping to minimum`,
-      );
+      this.log.warn(`${name}=${raw} below minimum ${MIN_POLLING_INTERVAL_MS}; clamping to minimum`);
       return MIN_POLLING_INTERVAL_MS;
     }
     return raw;
@@ -114,6 +123,9 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       initialUserKeyValu,
       pushRegistrationToken: this.pushRegistrationToken,
       logger: this.clientLogger,
+      onBatchApplied: (commands) => {
+        this.poller?.refreshSoon(commands.map((c) => c.devicecd));
+      },
       onTokenUpdate: (token) => {
         void this.tokenStore.save(token).catch((err) => {
           this.log.warn(`failed to persist token: ${(err as Error).message}`);
@@ -121,7 +133,9 @@ export class HiotPlatform implements DynamicPlatformPlugin {
       },
     });
 
-    this.poller = new HiotPoller(this.client, this.clientLogger, this.pollingIntervalMs);
+    this.poller = new HiotPoller(this.client, this.clientLogger, this.pollingIntervalMs, {
+      detailIntervalMs: this.detailPollingIntervalMs,
+    });
 
     try {
       await this.client.login();

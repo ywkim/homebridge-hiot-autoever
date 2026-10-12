@@ -51,6 +51,7 @@ describe('HiotPoller', () => {
     const spy = vi.spyOn(globalThis, 'setInterval');
     poller.start();
     expect(spy).toHaveBeenCalledWith(expect.any(Function), 5000);
+    expect(spy).toHaveBeenCalledTimes(2);
     poller.stop();
   });
 
@@ -62,7 +63,7 @@ describe('HiotPoller', () => {
     const spy = vi.spyOn(globalThis, 'setInterval');
     poller.start();
     poller.start();
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(2);
     poller.stop();
   });
 
@@ -74,7 +75,7 @@ describe('HiotPoller', () => {
     const clearSpy = vi.spyOn(globalThis, 'clearInterval');
     poller.start();
     poller.stop();
-    expect(clearSpy).toHaveBeenCalledTimes(1);
+    expect(clearSpy).toHaveBeenCalledTimes(2);
   });
 
   it('stop is safe to call before start', () => {
@@ -338,6 +339,158 @@ describe('HiotPoller', () => {
     const debugged = log.debug.mock.calls.flat().map(String).join(' ');
     expect(debugged).toContain('devicecd=HTR_TEST_001');
     expect(debugged).toContain('devicetypecd=HTR');
+  });
+
+  describe('split intervals', () => {
+    function lightsAndHeater() {
+      const client = makeClient();
+      const log = makeLog();
+      const light = makeHandler('L', 'LGT');
+      const heater = makeHandler('H', 'HTR');
+      client.getDeviceList.mockResolvedValue({
+        device: [
+          { devicecd: 'L', devicetypecd: 'LGT', devicenm: 'l', attributevalu: 'on' },
+          { devicecd: 'H', devicetypecd: 'HTR', devicenm: 'h', attributevalu: 'off' },
+        ],
+      });
+      client.getDevice.mockResolvedValue({
+        temperature: [{ current: '21', desired: '23', maxvalu: '30', minvalu: '15' }],
+        operation: [{ power: 'on' }],
+      });
+      return { client, log, light, heater };
+    }
+
+    it('start schedules the list timer and a slower detail timer', () => {
+      const { client, log } = lightsAndHeater();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 600_000, { detailIntervalMs: 3_600_000 });
+      const spy = vi.spyOn(globalThis, 'setInterval');
+      poller.start();
+      expect(spy).toHaveBeenCalledWith(expect.any(Function), 600_000);
+      expect(spy).toHaveBeenCalledWith(expect.any(Function), 3_600_000);
+      poller.stop();
+    });
+
+    it('list ticks do not call getDevice; detail ticks do', async () => {
+      const { client, log, light, heater } = lightsAndHeater();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 600_000, { detailIntervalMs: 3_600_000 });
+      poller.register('u1', light);
+      poller.register('u2', heater);
+      poller.start();
+      await vi.waitFor(() => expect(client.getDevice).toHaveBeenCalledTimes(1));
+      expect(client.getDeviceList).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(client.getDeviceList).toHaveBeenCalledTimes(2);
+      expect(client.getDevice).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(3_000_000);
+      expect(client.getDevice).toHaveBeenCalledTimes(2);
+      poller.stop();
+    });
+
+    it('a list tick never updates HTR/ACB/VNT, even after a detail read', async () => {
+      const { client, log, heater } = lightsAndHeater();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 600_000, { detailIntervalMs: 3_600_000 });
+      poller.register('u2', heater);
+      await poller.tick();
+      expect(heater.updateState).toHaveBeenCalledTimes(1);
+
+      await poller.refreshList();
+      expect(client.getDeviceList).not.toHaveBeenCalled();
+      expect(heater.updateState).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshSoon reads the list and the written detail device once after the settle delay', async () => {
+      const { client, log, light, heater } = lightsAndHeater();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 600_000, {
+        detailIntervalMs: 3_600_000,
+        settleMs: 8_000,
+      });
+      poller.register('u1', light);
+      poller.register('u2', heater);
+      await poller.tick();
+      client.getDeviceList.mockClear();
+      client.getDevice.mockClear();
+
+      poller.refreshSoon(['H']);
+      poller.refreshSoon(['H', 'L']);
+      await vi.advanceTimersByTimeAsync(7_999);
+      expect(client.getDeviceList).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(client.getDeviceList).toHaveBeenCalledTimes(1);
+      expect(client.getDevice).toHaveBeenCalledTimes(1);
+      expect(client.getDevice).toHaveBeenCalledWith('H');
+    });
+
+    it('refreshSoon reads again about 30s after the write', async () => {
+      const { client, log, light, heater } = lightsAndHeater();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 600_000, {
+        detailIntervalMs: 3_600_000,
+        settleMs: 8_000,
+      });
+      poller.register('u1', light);
+      poller.register('u2', heater);
+      await poller.tick();
+      client.getDeviceList.mockClear();
+      client.getDevice.mockClear();
+
+      poller.refreshSoon(['H']);
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(client.getDeviceList).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(21_999);
+      expect(client.getDeviceList).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(client.getDeviceList).toHaveBeenCalledTimes(2);
+      expect(client.getDevice).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(client.getDeviceList).toHaveBeenCalledTimes(2);
+      poller.stop();
+    });
+
+    it('refreshSoon retries shortly instead of dropping the read-back when a refresh is in flight', async () => {
+      const { client, log, light, heater } = lightsAndHeater();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 600_000, {
+        detailIntervalMs: 3_600_000,
+        settleMs: 8_000,
+      });
+      poller.register('u1', light);
+      poller.register('u2', heater);
+      await poller.tick();
+      client.getDeviceList.mockClear();
+      client.getDevice.mockClear();
+
+      let release: (v: unknown) => void = () => {};
+      client.getDeviceList.mockImplementationOnce(() => new Promise((r) => (release = r)));
+      const busy = poller.refreshList();
+      poller.refreshSoon(['H']);
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(client.getDevice).not.toHaveBeenCalled();
+
+      release({ device: [] });
+      await busy;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(client.getDevice).toHaveBeenCalledWith('H');
+      poller.stop();
+    });
+
+    it('stop cancels a pending refreshSoon', async () => {
+      const { client, log, light } = lightsAndHeater();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const poller = new HiotPoller(client as any, log, 600_000, { settleMs: 8_000 });
+      poller.register('u1', light);
+      poller.refreshSoon(['L']);
+      poller.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(client.getDeviceList).not.toHaveBeenCalled();
+    });
   });
 
   describe('list-based refresh', () => {

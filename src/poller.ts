@@ -34,23 +34,50 @@ export interface PollableHandler {
   updateState(res: DeviceResponse): void;
 }
 
+export interface HiotPollerOptions {
+  /** Interval for the per-device `getDevice` reads (HTR/ACB/VNT). Defaults to the list interval. */
+  detailIntervalMs?: number;
+  /** Delay before reading back state after a write, so the gateway has settled. */
+  settleMs?: number;
+}
+
+const DEFAULT_SETTLE_MS = 8_000;
+// The gateway can take longer than the first read-back to reflect a write; a second read at ~30s corrects a stale first one.
+const SETTLE_FOLLOW_UP_MS = 22_000;
+const SETTLE_BUSY_RETRY_MS = 2_000;
+
 /**
  * Background-polling driver. Recommended Homebridge wiring per the
  * "Background polling" pattern: characteristics have no onGet handler;
  * the platform owns a periodic refresh loop and pushes values into the
  * HomeKit cache via updateCharacteristic. HomeKit reads from cache, so
  * onGet "slow" warnings and duplicate per-characteristic API hits go away.
+ *
+ * Two cadences: one `getDeviceList` per list interval refreshes LGT/WSK/SWT/GDK;
+ * the per-device `getDevice` reads for HTR/ACB/VNT run on the slower detail
+ * interval, once at start, and shortly after a write.
  */
 export class HiotPoller {
-  private timer: ReturnType<typeof setInterval> | undefined;
+  private listTimer: ReturnType<typeof setInterval> | undefined;
+  private detailTimer: ReturnType<typeof setInterval> | undefined;
+  private settleTimer: ReturnType<typeof setTimeout> | undefined;
+  private settleFollowUp = false;
   private readonly handlers = new Map<string, PollableHandler>();
-  private tickInFlight = false;
+  private readonly pendingSettle = new Set<string>();
+  private listInFlight = false;
+  private detailInFlight = false;
+  private readonly detailIntervalMs: number;
+  private readonly settleMs: number;
 
   constructor(
     private readonly client: Pick<HiotClient, 'getDevice' | 'getDeviceList'>,
     private readonly log: HiotPollerLogger,
     private readonly intervalMs: number,
-  ) {}
+    options: HiotPollerOptions = {},
+  ) {
+    this.detailIntervalMs = options.detailIntervalMs ?? intervalMs;
+    this.settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
+  }
 
   register(uuid: string, handler: PollableHandler): void {
     this.handlers.set(uuid, handler);
@@ -65,70 +92,135 @@ export class HiotPoller {
   }
 
   start(): void {
-    if (this.timer) {
+    if (this.listTimer) {
       return;
     }
     void this.tick();
-    this.timer = setInterval(() => {
-      void this.tick();
+    this.listTimer = setInterval(() => {
+      void this.refreshList();
     }, this.intervalMs);
+    this.detailTimer = setInterval(() => {
+      void this.refreshDetails();
+    }, this.detailIntervalMs);
   }
 
   stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = undefined;
+    if (this.listTimer) {
+      clearInterval(this.listTimer);
+      this.listTimer = undefined;
     }
+    if (this.detailTimer) {
+      clearInterval(this.detailTimer);
+      this.detailTimer = undefined;
+    }
+    if (this.settleTimer) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = undefined;
+    }
+    this.settleFollowUp = false;
+    this.pendingSettle.clear();
   }
 
   async tick(): Promise<void> {
-    // A long-running tick (e.g. backend stall) must not stack ticks behind it.
-    if (this.tickInFlight) {
+    await Promise.all([this.refreshList(), this.refreshDetails()]);
+  }
+
+  /**
+   * Read state back after writes to the given devices: once after the settle delay and
+   * again ~30s after the write. Writes during the first wait are debounced into it; a write
+   * during the follow-up wait restarts both reads.
+   */
+  refreshSoon(devicecds: string[]): void {
+    for (const devicecd of devicecds) {
+      this.pendingSettle.add(devicecd);
+    }
+    if (this.settleTimer && !this.settleFollowUp) {
+      return;
+    }
+    this.scheduleSettle(this.settleMs, false);
+  }
+
+  private scheduleSettle(delayMs: number, followUp: boolean): void {
+    if (this.settleTimer) {
+      clearTimeout(this.settleTimer);
+    }
+    this.settleFollowUp = followUp;
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = undefined;
+      if (this.listInFlight || this.detailInFlight) {
+        this.scheduleSettle(SETTLE_BUSY_RETRY_MS, followUp);
+        return;
+      }
+      const written = new Set(this.pendingSettle);
+      if (followUp) {
+        this.pendingSettle.clear();
+      } else {
+        this.scheduleSettle(SETTLE_FOLLOW_UP_MS, true);
+      }
+      void Promise.all([this.refreshList(), this.refreshDetails(written)]);
+    }, delayMs);
+  }
+
+  // One getDeviceList call replaces a getDevice call per on/off device. HTR/ACB/VNT
+  // are left to the detail reads: the list's attributevalu was observed to disagree
+  // with an ACB's actual power. On failure the last cached values stay in place;
+  // a missing entry is skipped.
+  async refreshList(): Promise<void> {
+    // A long-running refresh (e.g. backend stall) must not stack behind itself.
+    if (this.listInFlight) {
       this.log.debug('poll tick still in-flight; skipping overlapping tick');
       return;
     }
-    this.tickInFlight = true;
+    const targets = [...this.handlers.values()].filter((h) => LIST_STATE_TYPES.has(h.devicetypecd));
+    if (targets.length === 0) {
+      return;
+    }
+    this.listInFlight = true;
     try {
-      const handlers = [...this.handlers.values()];
-      const listHandlers = handlers.filter((h) => LIST_STATE_TYPES.has(h.devicetypecd));
-      const detailHandlers = handlers.filter((h) => !LIST_STATE_TYPES.has(h.devicetypecd));
-      await Promise.all([
-        this.refreshFromList(listHandlers),
-        ...detailHandlers.map((handler) => this.refreshFromDetail(handler)),
-      ]);
+      let list: Device[];
+      try {
+        list = (await this.client.getDeviceList()).device ?? [];
+      } catch (err) {
+        this.log.warn(`poll failed for getDeviceList: ${(err as Error).message}`);
+        return;
+      }
+      const byCode = new Map(list.map((d) => [d.devicecd, d]));
+      for (const handler of targets) {
+        const entry = byCode.get(handler.devicecd);
+        const res = entry ? stateFromListEntry(handler.devicetypecd, entry) : undefined;
+        if (!res) {
+          this.log.debug(
+            `poll list entry unusable devicecd=${handler.devicecd} devicetypecd=${handler.devicetypecd}`,
+          );
+          continue;
+        }
+        try {
+          handler.updateState(res);
+        } catch (err) {
+          this.log.warn(`poll failed for devicetypecd=${handler.devicetypecd}: ${(err as Error).message}`);
+        }
+      }
     } finally {
-      this.tickInFlight = false;
+      this.listInFlight = false;
     }
   }
 
-  // One getDeviceList call replaces a getDevice call per on/off device. On
-  // failure the last cached values stay in place; a missing entry is skipped.
-  private async refreshFromList(handlers: PollableHandler[]): Promise<void> {
-    if (handlers.length === 0) {
+  async refreshDetails(only?: Set<string>): Promise<void> {
+    if (this.detailInFlight) {
+      this.log.debug('poll detail tick still in-flight; skipping overlapping tick');
       return;
     }
-    let list: Device[];
+    const targets = [...this.handlers.values()].filter(
+      (h) => !LIST_STATE_TYPES.has(h.devicetypecd) && (!only || only.has(h.devicecd)),
+    );
+    if (targets.length === 0) {
+      return;
+    }
+    this.detailInFlight = true;
     try {
-      list = (await this.client.getDeviceList()).device ?? [];
-    } catch (err) {
-      this.log.warn(`poll failed for getDeviceList: ${(err as Error).message}`);
-      return;
-    }
-    const byCode = new Map(list.map((d) => [d.devicecd, d]));
-    for (const handler of handlers) {
-      const entry = byCode.get(handler.devicecd);
-      const res = entry ? stateFromListEntry(handler.devicetypecd, entry) : undefined;
-      if (!res) {
-        this.log.debug(
-          `poll list entry unusable devicecd=${handler.devicecd} devicetypecd=${handler.devicetypecd}`,
-        );
-        continue;
-      }
-      try {
-        handler.updateState(res);
-      } catch (err) {
-        this.log.warn(`poll failed for devicetypecd=${handler.devicetypecd}: ${(err as Error).message}`);
-      }
+      await Promise.all(targets.map((handler) => this.refreshFromDetail(handler)));
+    } finally {
+      this.detailInFlight = false;
     }
   }
 
