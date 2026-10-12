@@ -255,6 +255,32 @@ describe('HiotClient', () => {
     expect(res.device[0].success).toBe(1);
   });
 
+  describe('onBatchApplied', () => {
+    function setup(batchData: object) {
+      interceptOnce(LOGIN_PATH, {
+        statusCode: 200,
+        data: { login: [{ userid: 'u', householdcd: 'h', userkeyvalu: 'T' }], complex: [] },
+        responseOptions: { headers: { 'set-cookie': 'JSESSIONID_HIOTWEB=s; Path=/' } },
+      });
+      interceptOnce('/hiot-web/device/exedevicebatchv2', { statusCode: 200, data: batchData });
+    }
+    const commands = [{ devicecd: 'LGT_X', resource: 'operation', attribute: 'power', value: 'off' }];
+
+    it('is called with the commands after a batch with no failures', async () => {
+      setup({ message: [], device: [{ all: 1, success: 1, fail: 0 }] });
+      const onBatchApplied = vi.fn();
+      await newClient({ onBatchApplied }).exeDeviceBatch(commands);
+      expect(onBatchApplied).toHaveBeenCalledWith(commands);
+    });
+
+    it('is not called when the batch reports failures', async () => {
+      setup({ message: [], device: [{ all: 1, success: 0, fail: 1 }] });
+      const onBatchApplied = vi.fn();
+      await newClient({ onBatchApplied }).exeDeviceBatch(commands);
+      expect(onBatchApplied).not.toHaveBeenCalled();
+    });
+  });
+
   describe('exeDeviceBatch response validation', () => {
     function setupLoginAndBatch(batchData: unknown) {
       interceptOnce(LOGIN_PATH, {

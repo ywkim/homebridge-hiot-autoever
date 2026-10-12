@@ -28,9 +28,16 @@
       "pollingIntervalMs": {
         "title": "Polling Interval (milliseconds)",
         "type": "number",
-        "default": 60000,
+        "default": 600000,
         "minimum": 5000,
-        "description": "How often the background poller refreshes device state from the Hi-oT cloud and pushes values into the HomeKit cache."
+        "description": "How often one device-list request refreshes on/off state for every device and pushes it into the HomeKit cache."
+      },
+      "detailPollingIntervalMs": {
+        "title": "Detail Polling Interval (milliseconds)",
+        "type": "number",
+        "default": 3600000,
+        "minimum": 5000,
+        "description": "How often heating, air-conditioner and ventilation devices are read one by one for temperature and fan speed. Each read costs one request per device."
       },
       "elevator": {
         "title": "Elevator Call",
