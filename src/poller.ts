@@ -42,6 +42,9 @@ export interface HiotPollerOptions {
 }
 
 const DEFAULT_SETTLE_MS = 8_000;
+// The gateway can take longer than the first read-back to reflect a write; a second read at ~30s corrects a stale first one.
+const SETTLE_FOLLOW_UP_MS = 22_000;
+const SETTLE_BUSY_RETRY_MS = 2_000;
 
 /**
  * Background-polling driver. Recommended Homebridge wiring per the
@@ -58,6 +61,7 @@ export class HiotPoller {
   private listTimer: ReturnType<typeof setInterval> | undefined;
   private detailTimer: ReturnType<typeof setInterval> | undefined;
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
+  private settleFollowUp = false;
   private readonly handlers = new Map<string, PollableHandler>();
   private readonly pendingSettle = new Set<string>();
   private listInFlight = false;
@@ -113,6 +117,7 @@ export class HiotPoller {
       clearTimeout(this.settleTimer);
       this.settleTimer = undefined;
     }
+    this.settleFollowUp = false;
     this.pendingSettle.clear();
   }
 
@@ -120,20 +125,40 @@ export class HiotPoller {
     await Promise.all([this.refreshList(), this.refreshDetails()]);
   }
 
-  /** Read state back once after writes to the given devices, debounced across calls. */
+  /**
+   * Read state back after writes to the given devices: once after the settle delay and
+   * again ~30s after the write. Writes during the first wait are debounced into it; a write
+   * during the follow-up wait restarts both reads.
+   */
   refreshSoon(devicecds: string[]): void {
     for (const devicecd of devicecds) {
       this.pendingSettle.add(devicecd);
     }
-    if (this.settleTimer) {
+    if (this.settleTimer && !this.settleFollowUp) {
       return;
     }
+    this.scheduleSettle(this.settleMs, false);
+  }
+
+  private scheduleSettle(delayMs: number, followUp: boolean): void {
+    if (this.settleTimer) {
+      clearTimeout(this.settleTimer);
+    }
+    this.settleFollowUp = followUp;
     this.settleTimer = setTimeout(() => {
       this.settleTimer = undefined;
+      if (this.listInFlight || this.detailInFlight) {
+        this.scheduleSettle(SETTLE_BUSY_RETRY_MS, followUp);
+        return;
+      }
       const written = new Set(this.pendingSettle);
-      this.pendingSettle.clear();
+      if (followUp) {
+        this.pendingSettle.clear();
+      } else {
+        this.scheduleSettle(SETTLE_FOLLOW_UP_MS, true);
+      }
       void Promise.all([this.refreshList(), this.refreshDetails(written)]);
-    }, this.settleMs);
+    }, delayMs);
   }
 
   // One getDeviceList call replaces a getDevice call per on/off device. HTR/ACB/VNT
