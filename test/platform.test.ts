@@ -601,15 +601,15 @@ describe('HiotPlatform', () => {
     }
   });
 
-  it('constructs HiotPoller with default 600_000 ms list and 3_600_000 ms detail intervals when config omits them', async () => {
+  it('constructs HiotPoller with default 900_000 ms list and 7_200_000 ms detail intervals when config omits them', async () => {
     loginMock.mockResolvedValue({});
     getDeviceListMock.mockResolvedValue({ device: [] });
     const { platform } = makePlatform();
     await platform.handleDidFinishLaunching();
 
     expect(pollerCtorCalls).toHaveLength(1);
-    expect(pollerCtorCalls[0].intervalMs).toBe(600_000);
-    expect(pollerCtorCalls[0].detailIntervalMs).toBe(3_600_000);
+    expect(pollerCtorCalls[0].intervalMs).toBe(900_000);
+    expect(pollerCtorCalls[0].detailIntervalMs).toBe(7_200_000);
   });
 
   it('honors configured pollingIntervalMs', async () => {

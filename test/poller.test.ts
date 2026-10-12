@@ -390,36 +390,17 @@ describe('HiotPoller', () => {
       poller.stop();
     });
 
-    it('a list tick patches the cached detail response with the list power for HTR/ACB/VNT', async () => {
+    it('a list tick never updates HTR/ACB/VNT, even after a detail read', async () => {
       const { client, log, heater } = lightsAndHeater();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const poller = new HiotPoller(client as any, log, 600_000, { detailIntervalMs: 3_600_000 });
       poller.register('u2', heater);
       await poller.tick();
-      expect(heater.updateState).toHaveBeenLastCalledWith({
-        temperature: [{ current: '21', desired: '23', maxvalu: '30', minvalu: '15' }],
-        operation: [{ power: 'on' }],
-      });
+      expect(heater.updateState).toHaveBeenCalledTimes(1);
 
-      client.getDeviceList.mockResolvedValue({
-        device: [{ devicecd: 'H', devicetypecd: 'HTR', devicenm: 'h', attributevalu: 'off' }],
-      });
-      await poller.refreshList();
-      expect(client.getDevice).toHaveBeenCalledTimes(1);
-      expect(heater.updateState).toHaveBeenLastCalledWith({
-        temperature: [{ current: '21', desired: '23', maxvalu: '30', minvalu: '15' }],
-        operation: [{ power: 'off' }],
-      });
-    });
-
-    it('a list tick leaves HTR/ACB/VNT alone until a detail response is cached', async () => {
-      const { client, log, heater } = lightsAndHeater();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const poller = new HiotPoller(client as any, log, 600_000, { detailIntervalMs: 3_600_000 });
-      poller.register('u2', heater);
       await poller.refreshList();
       expect(client.getDeviceList).not.toHaveBeenCalled();
-      expect(heater.updateState).not.toHaveBeenCalled();
+      expect(heater.updateState).toHaveBeenCalledTimes(1);
     });
 
     it('refreshSoon reads the list and the written detail device once after the settle delay', async () => {

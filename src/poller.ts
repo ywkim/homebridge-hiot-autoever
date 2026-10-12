@@ -50,16 +50,15 @@ const DEFAULT_SETTLE_MS = 8_000;
  * HomeKit cache via updateCharacteristic. HomeKit reads from cache, so
  * onGet "slow" warnings and duplicate per-characteristic API hits go away.
  *
- * Two cadences: one `getDeviceList` per list interval carries on/off for every
- * device; the per-device `getDevice` reads (temperature, airvolume) run on the
- * slower detail interval, once at start, and shortly after a write.
+ * Two cadences: one `getDeviceList` per list interval refreshes LGT/WSK/SWT/GDK;
+ * the per-device `getDevice` reads for HTR/ACB/VNT run on the slower detail
+ * interval, once at start, and shortly after a write.
  */
 export class HiotPoller {
   private listTimer: ReturnType<typeof setInterval> | undefined;
   private detailTimer: ReturnType<typeof setInterval> | undefined;
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly handlers = new Map<string, PollableHandler>();
-  private readonly detailCache = new Map<string, DeviceResponse>();
   private readonly pendingSettle = new Set<string>();
   private listInFlight = false;
   private detailInFlight = false;
@@ -81,10 +80,6 @@ export class HiotPoller {
   }
 
   unregister(uuid: string): void {
-    const handler = this.handlers.get(uuid);
-    if (handler) {
-      this.detailCache.delete(handler.devicecd);
-    }
     this.handlers.delete(uuid);
   }
 
@@ -141,20 +136,17 @@ export class HiotPoller {
     }, this.settleMs);
   }
 
-  // One getDeviceList call replaces a getDevice call per on/off device. For
-  // HTR/ACB/VNT it only refreshes power, patched onto the last detail response
-  // because their handlers also need temperature/airvolume. On failure the last
-  // cached values stay in place; a missing entry is skipped.
+  // One getDeviceList call replaces a getDevice call per on/off device. HTR/ACB/VNT
+  // are left to the detail reads: the list's attributevalu was observed to disagree
+  // with an ACB's actual power. On failure the last cached values stay in place;
+  // a missing entry is skipped.
   async refreshList(): Promise<void> {
     // A long-running refresh (e.g. backend stall) must not stack behind itself.
     if (this.listInFlight) {
       this.log.debug('poll tick still in-flight; skipping overlapping tick');
       return;
     }
-    const all = [...this.handlers.values()];
-    const targets = all.filter(
-      (h) => LIST_STATE_TYPES.has(h.devicetypecd) || this.detailCache.has(h.devicecd),
-    );
+    const targets = [...this.handlers.values()].filter((h) => LIST_STATE_TYPES.has(h.devicetypecd));
     if (targets.length === 0) {
       return;
     }
@@ -170,7 +162,7 @@ export class HiotPoller {
       const byCode = new Map(list.map((d) => [d.devicecd, d]));
       for (const handler of targets) {
         const entry = byCode.get(handler.devicecd);
-        const res = entry ? this.stateFromList(handler, entry) : undefined;
+        const res = entry ? stateFromListEntry(handler.devicetypecd, entry) : undefined;
         if (!res) {
           this.log.debug(
             `poll list entry unusable devicecd=${handler.devicecd} devicetypecd=${handler.devicetypecd}`,
@@ -207,22 +199,9 @@ export class HiotPoller {
     }
   }
 
-  private stateFromList(handler: PollableHandler, entry: Device): DeviceResponse | undefined {
-    const fromList = stateFromListEntry(handler.devicetypecd, entry);
-    if (!fromList || LIST_STATE_TYPES.has(handler.devicetypecd)) {
-      return fromList;
-    }
-    const cached = this.detailCache.get(handler.devicecd);
-    if (!cached) {
-      return undefined;
-    }
-    return { ...cached, operation: [{ ...cached.operation?.[0], ...fromList.operation?.[0] }] };
-  }
-
   private async refreshFromDetail(handler: PollableHandler): Promise<void> {
     try {
       const res = await this.client.getDevice(handler.devicecd);
-      this.detailCache.set(handler.devicecd, res);
       handler.updateState(res);
     } catch (err) {
       const msg = (err as Error).message;

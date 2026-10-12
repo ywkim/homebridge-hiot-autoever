@@ -15,8 +15,8 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { TokenStore } from './storage/tokenStore.js';
 
 const DEFAULT_BASE_URL = 'https://home.hiot.autoever.com:8443';
-const DEFAULT_POLLING_INTERVAL_MS = 600_000;
-const DEFAULT_DETAIL_POLLING_INTERVAL_MS = 3_600_000;
+const DEFAULT_POLLING_INTERVAL_MS = 900_000;
+const DEFAULT_DETAIL_POLLING_INTERVAL_MS = 7_200_000;
 const MIN_POLLING_INTERVAL_MS = 5_000;
 
 /** Stable seed for the elevator (ELV) accessory UUID. ELV is a service, not a

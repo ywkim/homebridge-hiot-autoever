@@ -41,9 +41,9 @@ PR은 신규/수정 코드에 테스트 없으면 CI 차단.
 - 폴링: `src/poller.ts` — Homebridge "Background polling" 패턴. 핸들러는 onGet을
   등록하지 않고, 폴러가 주기적으로 상태를 읽어 각 핸들러의 `updateState(res)`로
   `Characteristic.updateValue` cache 갱신. HomeKit은 cache만 읽으므로 onGet "slow"
-  경고와 중복 호출이 사라진다. 요청 주기는 둘로 나뉜다. 목록 주기(기본 10분): `getDeviceList` 1회의
-  `attributevalu`로 LGT/WSK/SWT/GDK(GDK는 `valve.lock`)를 갱신하고, HTR/ACB/VNT는 마지막 상세 응답에
-  목록의 power를 덮어써 갱신. 상세 주기(기본 1시간): 온도·풍량이 상세에만 있어 HTR/ACB/VNT를
+  경고와 중복 호출이 사라진다. 요청 주기는 둘로 나뉜다. 목록 주기(기본 15분): `getDeviceList` 1회의
+  `attributevalu`로 LGT/WSK/SWT/GDK(GDK는 `valve.lock`)를 갱신. HTR/ACB/VNT는 목록으로 갱신하지
+  않는다(ACB 목록 값이 실제 power와 다른 사례 실측). 상세 주기(기본 2시간): 온도·풍량이 상세에만 있어 HTR/ACB/VNT를
   `getDevice`로 기기별 호출(시작 시 1회 포함). 쓰기(`exeDeviceBatch`) 성공 후 약 8초 뒤 목록 1회와 쓴 기기의
   상세를 한 번 읽는다(`refreshSoon`). 목록 호출이 실패하면 마지막 값을 유지한다.
 
